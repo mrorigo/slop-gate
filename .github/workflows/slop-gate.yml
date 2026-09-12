@@ -1,0 +1,39 @@
+name: Slop Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  index-main:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo run --release -- index --ref HEAD --output .slop-gate/index.json
+      - uses: actions/cache/save@v4
+        with:
+          path: .slop-gate/index.json
+          key: slop-gate-index-${{ github.sha }}
+
+  check-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/cache/restore@v4
+        with:
+          path: .slop-gate
+          path: .slop-gate/index.json
+          key: slop-gate-index-${{ github.event.pull_request.base.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo run --release -- check --base ${{ github.event.pull_request.base.sha }} --head HEAD --index .slop-gate/index.json --format sarif > slop-gate.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: slop-gate.sarif
