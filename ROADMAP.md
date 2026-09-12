@@ -194,6 +194,87 @@ and normalized identity.
 | P5.3 | `dependency-surface-growth` manifest parser and policy. **Complete 2026-09-12.** | Registry, Git, path, renamed, target-specific, workspace-inherited, feature-expansion, version-only, malformed-TOML, suppression, warn, error, JSON, and SARIF fixtures. |
 | P5.4 | Calibration report for each enabled rule. **Complete 2026-09-12.** | At least 30 sampled warning findings per rule before promotion to `error`. |
 
+## 0.2 enhancement plan: structural clone matching
+
+Status: **planned**. This phase improves same-language near-clone matching
+without claiming semantic equivalence. The implementation remains Rust-only and
+uses Tree-sitter syntax trees without type resolution, name resolution, macro
+expansion, or control-flow graph construction.
+
+### Product decision
+
+Keep token shingles as the bounded candidate-retrieval index. Add a normalized
+AST representation as a second structural signal. Preserve child and statement
+order in version 1 of this representation. Reordering arbitrary statements is
+not equivalent because Rust expressions can mutate state, move values, run
+destructors, or affect borrowing.
+
+Basic-block control-flow graph similarity, type-aware matching, and
+order-insensitive statement normalization are deferred until a semantic model
+and a false-positive corpus exist.
+
+### P6.0: normalized AST facts
+
+For each extracted Rust function, compute a deterministic AST-shape stream and
+its BLAKE3 hash. The stream must:
+
+- preserve Tree-sitter node kind and child order;
+- normalize identifier and literal leaves to the existing `ID` and `LIT` classes;
+- omit comments, attributes, and nested named function bodies;
+- retain syntactic operators, control-flow nodes, scopes, and pattern structure;
+- use a versioned representation label in the analyzer fingerprint.
+
+Add the AST hash and node count to the artifact schema. Bump the artifact schema
+version when the serialized representation changes. Older artifacts must fail
+with an actionable version error; no implicit migration is required.
+
+### P6.1: bounded structural scoring
+
+Retain the existing sorted token-shingle index and candidate limit of `64`.
+Compute normalized AST five-node shingle sets only for retrieved candidates.
+For each candidate, record both token-shingle Jaccard and AST-shingle Jaccard.
+An exact normalized AST hash is a structural match with similarity `1.0`.
+
+Do not change the default gate decision until calibration demonstrates that the
+AST signal improves recall without exceeding the project false-positive limit.
+The selected policy must define whether a finding requires the token score, the
+AST score, or both. That decision must be represented in the policy fingerprint.
+
+### P6.2: fixtures and rollout
+
+Add fixture-driven coverage for:
+
+- identifier and literal renames that preserve AST shape;
+- equivalent syntax with different formatting and comments;
+- changed nesting, match patterns, and control-flow structure;
+- reordered statements that must not be treated as equivalent by default;
+- binding-scope changes that alter AST scope structure;
+- nested functions, closures, macros, and attributes;
+- deterministic artifact and report output across repeated runs.
+
+Run the AST matcher in warning mode during calibration. Record at least `30`
+sampled findings and their false-positive classification. Promote the signal to
+an error-capable gate only when the measured false-positive rate is at most
+`5%` and the benchmark remains within the performance budget.
+
+### 0.2 acceptance criteria
+
+| Constraint | Criterion |
+| --- | --- |
+| Compatibility | P5 artifacts are rejected clearly; P6 artifacts identify the AST representation version. |
+| Determinism | Identical revisions, policy, and artifact produce byte-identical JSON and SARIF. |
+| Safety | No AST rule treats arbitrary statement reordering as equivalent by default. |
+| Bounded work | Candidate retrieval remains limited to `64` functions per subject; unchanged P5 indexing limits remain intact. |
+| Performance | P6 adds no more than `100 ms` p95 to the fixed P5 benchmark in `docs/SLOP-GATE-PLAN.md`. |
+| Rollout quality | At least `30` sampled warnings and a false-positive rate at or below `5%` are documented before error-level promotion. |
+
+### Deferred from 0.2
+
+1. Type-aware clone matching that requires compiler metadata or name resolution.
+2. Basic-block control-flow graph similarity.
+3. General commutativity or statement-reordering rules.
+4. Cross-language structural matching.
+
 ## Quantification of constraints
 
 | Qualitative term | Measurable acceptance criterion |

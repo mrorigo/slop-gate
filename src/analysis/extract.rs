@@ -25,23 +25,38 @@ pub(crate) fn dependency_edges(source: &str) -> Result<Vec<DependencyEdge>> {
         return Err(Error::invalid("Cargo manifest", "root must be a table"));
     };
     for table_name in ["dependencies", "build-dependencies"] {
-        if let Some(table) = root.get(table_name).and_then(toml::Value::as_table) {
-            collect_dependency_table(table, table_name, source, &mut edges);
+        if let Some(value) = root.get(table_name) {
+            let table = value.as_table().ok_or_else(|| {
+                Error::invalid("Cargo manifest", format!("{table_name} must be a table"))
+            })?;
+            collect_dependency_table(table, table_name, source, &mut edges)?;
         }
     }
-    if let Some(targets) = root.get("target").and_then(toml::Value::as_table) {
+    if let Some(value) = root.get("target") {
+        let targets = value
+            .as_table()
+            .ok_or_else(|| Error::invalid("Cargo manifest", "target must be a table"))?;
         for (selector, target) in targets {
-            let Some(target) = target.as_table() else {
-                continue;
-            };
+            let target = target.as_table().ok_or_else(|| {
+                Error::invalid(
+                    "Cargo manifest",
+                    format!("target.{selector} must be a table"),
+                )
+            })?;
             for table_name in ["dependencies", "build-dependencies"] {
-                if let Some(table) = target.get(table_name).and_then(toml::Value::as_table) {
+                if let Some(value) = target.get(table_name) {
+                    let table = value.as_table().ok_or_else(|| {
+                        Error::invalid(
+                            "Cargo manifest",
+                            format!("target.{selector}.{table_name} must be a table"),
+                        )
+                    })?;
                     collect_dependency_table(
                         table,
                         &format!("target.{selector}.{table_name}"),
                         source,
                         &mut edges,
-                    );
+                    )?;
                 }
             }
         }
@@ -57,7 +72,7 @@ fn collect_dependency_table(
     table_path: &str,
     source: &str,
     edges: &mut Vec<DependencyEdge>,
-) {
+) -> Result<()> {
     for (dependency_key, value) in table {
         let (package, source_kind, dependency_source, default_features, features, version) =
             match value {
@@ -115,14 +130,12 @@ fn collect_dependency_table(
                         version,
                     )
                 }
-                _ => (
-                    None,
-                    "unspecified".to_string(),
-                    None,
-                    true,
-                    Vec::new(),
-                    None,
-                ),
+                _ => {
+                    return Err(Error::invalid(
+                        "Cargo dependency",
+                        format!("{table_path}.{dependency_key} must be a string or table"),
+                    ));
+                }
             };
         edges.push(DependencyEdge {
             table_path: table_path.to_string(),
@@ -136,6 +149,7 @@ fn collect_dependency_table(
             line: dependency_line(source, table_path, dependency_key),
         });
     }
+    Ok(())
 }
 
 fn dependency_line(source: &str, table_path: &str, dependency_key: &str) -> usize {
@@ -147,11 +161,11 @@ fn dependency_line(source: &str, table_path: &str, dependency_key: &str) -> usiz
             in_table = canonical_header(line) == expected_header;
             continue;
         }
-        if in_table
-            && (line.starts_with(&format!("{dependency_key} ="))
-                || line.starts_with(&format!("\"{dependency_key}\" =")))
-        {
-            return line_number + 1;
+        if in_table && let Some((key, _value)) = line.split_once('=') {
+            let key = key.trim();
+            if key == dependency_key || key == format!("\"{dependency_key}\"") {
+                return line_number + 1;
+            }
         }
     }
     1
@@ -779,5 +793,26 @@ cc = { git = "https://example.invalid/cc" }
     #[test]
     fn rejects_malformed_cargo_manifest() {
         assert!(dependency_edges("[dependencies\nserde = \"1\"\n").is_err());
+    }
+
+    #[test]
+    fn rejects_structurally_invalid_dependency_tables() {
+        assert!(dependency_edges("[dependencies]\nserde = true\n").is_err());
+        assert!(dependency_edges("dependencies = \"invalid\"\n").is_err());
+        assert!(dependency_edges("target = \"invalid\"\n").is_err());
+        assert!(dependency_edges("[target]\nwasm = \"invalid\"\n").is_err());
+    }
+
+    #[test]
+    fn finds_dependency_lines_with_optional_toml_whitespace() {
+        let source = "[dependencies]\nserde=\"1\"\n\"serde_json\" = { version = \"1\" }\n";
+        let edges = dependency_edges(source).unwrap();
+        assert_eq!(
+            edges
+                .iter()
+                .map(|edge| (edge.dependency_key.as_str(), edge.line))
+                .collect::<Vec<_>>(),
+            [("serde", 2), ("serde_json", 3)]
+        );
     }
 }
