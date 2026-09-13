@@ -25,7 +25,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          package_version="$(cargo pkgid --locked | sed -n 's/.*#slop-gate@//p')"
+          package_id="$(cargo pkgid --locked)"
+          package_version="${package_id##*#}"
           tag_version="${GITHUB_REF_NAME#v}"
           if [[ "$package_version" != "$tag_version" ]]; then
             echo "tag v$tag_version does not match Cargo package version $package_version" >&2
