@@ -8,10 +8,9 @@ use crate::error::{Error, Result};
 use super::AnalyzedFile;
 
 /// Current on-disk schema version for [`IndexArtifact`].
-pub const ARTIFACT_VERSION: u32 = 1;
+pub const ARTIFACT_VERSION: u32 = 2;
 
-const ANALYZER_RULESET: &str =
-    "slop-gate-analysis-v1|rust-function-item|rust-cc-v1|normalized-token-v1|shingle-v1";
+const ANALYZER_RULESET: &str = "slop-gate-analysis-v2|rust-function-item|rust-cc-v1|normalized-token-v1|shingle-v1|normalized-ast-v1|ast-shingle-v1";
 
 /// A portable baseline index for one exact Git revision.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -38,7 +37,7 @@ impl IndexArtifact {
     ///
     /// # Returns
     ///
-    /// Returns a schema-v1 artifact with files in stable path order.
+    /// Returns a schema-v2 artifact with files in stable path order.
     ///
     /// # Errors
     ///
@@ -57,7 +56,7 @@ impl IndexArtifact {
     ///
     /// # Returns
     ///
-    /// Returns a schema-v1 artifact with files in stable path order.
+    /// Returns a schema-v2 artifact with files in stable path order.
     ///
     /// # Errors
     ///
@@ -254,6 +253,7 @@ mod tests {
         let file = analyze_rust_file("src/lib.rs", "fn answer() -> u8 { 42 }\n").unwrap();
         let artifact = IndexArtifact::new("a".repeat(40), vec![file]).unwrap();
         let encoded = artifact.to_json().unwrap();
+        assert_eq!(artifact.to_json().unwrap(), encoded);
         assert_eq!(IndexArtifact::from_json(&encoded).unwrap(), artifact);
     }
 
@@ -262,5 +262,15 @@ mod tests {
         let mut file = analyze_rust_file("src/lib.rs", "fn answer() {}\n").unwrap();
         file.path = "../lib.rs".to_string();
         assert!(IndexArtifact::new("a".repeat(40), vec![file]).is_err());
+    }
+
+    #[test]
+    fn artifact_rejects_the_previous_schema_version() {
+        let file = analyze_rust_file("src/lib.rs", "fn answer() {}\n").unwrap();
+        let artifact = IndexArtifact::new("a".repeat(40), vec![file]).unwrap();
+        let mut document = serde_json::to_value(artifact).unwrap();
+        document["artifact_version"] = serde_json::json!(1);
+        let encoded = serde_json::to_vec(&document).unwrap();
+        assert!(IndexArtifact::from_json(&encoded).is_err());
     }
 }

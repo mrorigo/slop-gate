@@ -17,8 +17,7 @@ const SHINGLE_SIZE: usize = 5;
 
 /// Extracts direct production and build dependency edges from a Cargo manifest.
 pub(crate) fn dependency_edges(source: &str) -> Result<Vec<DependencyEdge>> {
-    let document = source
-        .parse::<toml::Value>()
+    let document = toml::from_str::<toml::Value>(source)
         .map_err(|error| Error::invalid("Cargo manifest", error))?;
     let mut edges = Vec::new();
     let Some(root) = document.as_table() else {
@@ -478,7 +477,16 @@ fn record_function(
     let normalized_hash = blake3::hash(tokens.join("\u{1f}").as_bytes())
         .to_hex()
         .to_string();
-    let shingle_hashes = shingle_hashes(&tokens);
+    let token_shingle_hashes = shingle_hashes(&tokens);
+    let ast_stream = normalized_ast(node, source, true)?;
+    let ast_hash = blake3::hash(ast_stream.join("\u{1f}").as_bytes())
+        .to_hex()
+        .to_string();
+    let ast_node_count = ast_stream
+        .iter()
+        .filter(|token| !token.starts_with("/N:"))
+        .count();
+    let ast_shingle_hashes = shingle_hashes(&ast_stream);
     let sloc = physical_sloc(node, source)?;
     let cc = cyclomatic_complexity(node, source)?;
 
@@ -493,11 +501,14 @@ fn record_function(
         start_line: node.start_position().row + 1,
         end_line: node.end_position().row + 1,
         normalized_hash,
+        ast_hash,
+        ast_node_count,
         token_count,
         sloc,
         cc,
         mass: f64::from(cc) * (sloc as f64).sqrt(),
-        shingle_hashes,
+        shingle_hashes: token_shingle_hashes,
+        ast_shingle_hashes,
     })
 }
 
@@ -517,6 +528,28 @@ fn normalized_tokens(node: Node<'_>, source: &str, is_root: bool) -> Result<Vec<
         tokens.extend(normalized_tokens(child, source, false)?);
     }
     Ok(tokens)
+}
+
+fn normalized_ast(node: Node<'_>, source: &str, is_root: bool) -> Result<Vec<String>> {
+    if !is_root && node.kind() == "function_item" {
+        return Ok(Vec::new());
+    }
+    if matches!(
+        node.kind(),
+        "line_comment" | "block_comment" | "attribute_item" | "inner_attribute_item"
+    ) {
+        return Ok(Vec::new());
+    }
+    if node.child_count() == 0 {
+        return Ok(vec![format!("L:{}", normalize_leaf(node, source)?)]);
+    }
+    let mut stream = vec![format!("N:{}", node.kind())];
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        stream.extend(normalized_ast(child, source, false)?);
+    }
+    stream.push(format!("/N:{}", node.kind()));
+    Ok(stream)
 }
 
 fn normalize_leaf(node: Node<'_>, source: &str) -> Result<String> {
@@ -693,6 +726,42 @@ mod parser {
             first.functions[0].normalized_hash,
             second.functions[0].normalized_hash
         );
+        assert_eq!(first.functions[0].ast_hash, second.functions[0].ast_hash);
+        assert!(first.functions[0].ast_node_count > 0);
+        assert!(!first.functions[0].ast_shingle_hashes.is_empty());
+    }
+
+    #[test]
+    fn ast_fingerprint_preserves_statement_order() {
+        let first = analyze_rust_file(
+            "src/a.rs",
+            "fn ordered(value: i32) -> i32 { let first = value + 1; let second = first * 2; second }\n",
+        )
+        .unwrap();
+        let second = analyze_rust_file(
+            "src/a.rs",
+            "fn ordered(value: i32) -> i32 { let second = value * 2; let first = second + 1; first }\n",
+        )
+        .unwrap();
+        assert_ne!(first.functions[0].ast_hash, second.functions[0].ast_hash);
+    }
+
+    #[test]
+    fn ast_facts_cover_closures_macros_attributes_and_nested_functions() {
+        let with_syntax_features = r#"#[inline]
+fn outer(value: usize) -> usize {
+    macro_rules! add_one { ($input:expr) => { $input + 1 }; }
+    let closure = |input| input + 1;
+    fn nested(input: usize) -> usize { input + 2 }
+    add_one!(closure(value)) + nested(value)
+}
+"#;
+        let without_attribute = with_syntax_features.strip_prefix("#[inline]\n").unwrap();
+        let first = analyze_rust_file("src/a.rs", with_syntax_features).unwrap();
+        let second = analyze_rust_file("src/a.rs", without_attribute).unwrap();
+        assert_eq!(first.functions.len(), 1);
+        assert_eq!(second.functions.len(), 1);
+        assert_eq!(first.functions[0].ast_hash, second.functions[0].ast_hash);
     }
 
     #[test]
