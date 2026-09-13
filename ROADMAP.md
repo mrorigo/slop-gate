@@ -2,7 +2,7 @@
 
 ## 0.2 enhancement plan: structural clone matching
 
-Status: **in progress**. This phase improves same-language near-clone matching
+Status: **complete**. This phase improves same-language near-clone matching
 without claiming semantic equivalence. The implementation remains Rust-only and
 uses Tree-sitter syntax trees without type resolution, name resolution, macro
 expansion, or control-flow graph construction.
@@ -39,9 +39,8 @@ with an actionable version error; no implicit migration is required.
 
 ### P6.1: bounded structural scoring
 
-Status: **in progress**. Token shingles still retrieve at most `64` candidates.
-Candidates must meet the configured threshold for both token and AST similarity.
-Findings report both component scores.
+Status: **complete**. Token shingles still retrieve at most `64` candidates.
+Candidates must pass both token and AST similarity thresholds.
 
 Retain the existing sorted token-shingle index and candidate limit of `64`.
 Compute normalized AST five-node shingle sets only for retrieved candidates.
@@ -54,6 +53,9 @@ The selected policy must define whether a finding requires the token score, the
 AST score, or both. That decision must be represented in the policy fingerprint.
 
 ### P6.2: fixtures and rollout
+
+Status: **complete**. Fixture coverage and calibration evidence are recorded in
+[`docs/AST-CALIBRATION-REPORT.md`](docs/AST-CALIBRATION-REPORT.md).
 
 Add fixture-driven coverage for:
 

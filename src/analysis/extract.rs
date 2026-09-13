@@ -17,8 +17,7 @@ const SHINGLE_SIZE: usize = 5;
 
 /// Extracts direct production and build dependency edges from a Cargo manifest.
 pub(crate) fn dependency_edges(source: &str) -> Result<Vec<DependencyEdge>> {
-    let document = source
-        .parse::<toml::Value>()
+    let document = toml::from_str::<toml::Value>(source)
         .map_err(|error| Error::invalid("Cargo manifest", error))?;
     let mut edges = Vec::new();
     let Some(root) = document.as_table() else {
@@ -745,6 +744,24 @@ mod parser {
         )
         .unwrap();
         assert_ne!(first.functions[0].ast_hash, second.functions[0].ast_hash);
+    }
+
+    #[test]
+    fn ast_facts_cover_closures_macros_attributes_and_nested_functions() {
+        let with_syntax_features = r#"#[inline]
+fn outer(value: usize) -> usize {
+    macro_rules! add_one { ($input:expr) => { $input + 1 }; }
+    let closure = |input| input + 1;
+    fn nested(input: usize) -> usize { input + 2 }
+    add_one!(closure(value)) + nested(value)
+}
+"#;
+        let without_attribute = with_syntax_features.strip_prefix("#[inline]\n").unwrap();
+        let first = analyze_rust_file("src/a.rs", with_syntax_features).unwrap();
+        let second = analyze_rust_file("src/a.rs", without_attribute).unwrap();
+        assert_eq!(first.functions.len(), 1);
+        assert_eq!(second.functions.len(), 1);
+        assert_eq!(first.functions[0].ast_hash, second.functions[0].ast_hash);
     }
 
     #[test]

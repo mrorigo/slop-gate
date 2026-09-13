@@ -791,7 +791,7 @@ mod tests {
     use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{CloneIndex, bind_policy, build_artifact, check_mass, scan_clones};
+    use super::{CloneIndex, Severity, bind_policy, build_artifact, check_mass, scan_clones};
     use crate::analysis::analyze_rust_file;
     use crate::config::GateConfig;
     use crate::git::GitRepository;
@@ -1287,8 +1287,17 @@ mod tests {
         let artifact = build_artifact(&repository.repository(), "HEAD").unwrap();
 
         let report = scan_clones(&artifact, &GateConfig::default());
+        let repeated_report = scan_clones(&artifact, &GateConfig::default());
         assert_eq!(report.findings.len(), 1);
         assert_eq!(report.findings[0].rule_id, "near-clone");
+        assert_eq!(
+            serde_json::to_vec(&report).unwrap(),
+            serde_json::to_vec(&repeated_report).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_vec(&crate::sarif::render(&report)).unwrap(),
+            serde_json::to_vec(&crate::sarif::render(&repeated_report)).unwrap()
+        );
     }
 
     #[test]
@@ -1332,9 +1341,80 @@ mod tests {
         );
     }
 
+    #[test]
+    fn calibrates_thirty_structural_clone_pairs_and_thirty_negatives() {
+        let config = GateConfig::default();
+        let calibration_source = (0..31)
+            .map(|index| clone_function(&format!("clone_{index}"), &format!("value_{index}")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let calibration_repository = TestRepository::new(&calibration_source);
+        let calibration_artifact =
+            build_artifact(&calibration_repository.repository(), "HEAD").unwrap();
+        let calibration_report = scan_clones(&calibration_artifact, &config);
+        assert_eq!(calibration_report.findings.len(), 30);
+        assert!(calibration_report.findings.iter().all(
+            |finding| finding.rule_id == "near-clone" && finding.severity == Severity::Warning
+        ));
+
+        let mut positive_matches = 0;
+        let mut negative_matches = 0;
+        for index in 0..30 {
+            let candidate = analyze_rust_file(
+                &format!("src/candidate_{index}.rs"),
+                &clone_function("candidate", "input"),
+            )
+            .unwrap()
+            .functions
+            .into_iter()
+            .next()
+            .unwrap();
+            let subject = analyze_rust_file(
+                &format!("src/subject_{index}.rs"),
+                &clone_function("subject", "value"),
+            )
+            .unwrap()
+            .functions
+            .into_iter()
+            .next()
+            .unwrap();
+            let index_for_pair = CloneIndex::from_functions([candidate]);
+            if index_for_pair
+                .best_match(&subject, &config.rules.near_clone)
+                .is_some()
+            {
+                positive_matches += 1;
+            }
+
+            let negative = analyze_rust_file(
+                &format!("src/negative_{index}.rs"),
+                &different_function("negative", "value"),
+            )
+            .unwrap()
+            .functions
+            .into_iter()
+            .next()
+            .unwrap();
+            if index_for_pair
+                .best_match(&negative, &config.rules.near_clone)
+                .is_some()
+            {
+                negative_matches += 1;
+            }
+        }
+        assert_eq!(positive_matches, 30);
+        assert_eq!(negative_matches, 0);
+    }
+
     fn clone_function(name: &str, parameter: &str) -> String {
         format!(
             "fn {name}({parameter}: usize) -> usize {{\n    let mut total = 0;\n    if {parameter} > 0 {{ total += {parameter}; }}\n    if {parameter} > 1 {{ total += 1; }}\n    if {parameter} > 2 {{ total += 2; }}\n    if {parameter} > 3 {{ total += 3; }}\n    if {parameter} > 4 {{ total += 4; }}\n    total\n}}\n"
+        )
+    }
+
+    fn different_function(name: &str, parameter: &str) -> String {
+        format!(
+            "fn {name}({parameter}: usize) -> usize {{\n    let mut total = 0;\n    let mut cursor = {parameter};\n    while cursor > 0 {{\n        total += cursor;\n        cursor -= 1;\n    }}\n    match total {{\n        0 => 7,\n        _ => total / 2,\n    }}\n}}\n"
         )
     }
 

@@ -46,7 +46,7 @@ The current baseline passes:
 1. `cargo check`
 2. `cargo fmt --check`
 3. `cargo clippy --all-targets -- -D warnings`
-4. `cargo test` — 45 tests
+4. `cargo test` — 47 tests
 5. `RUSTDOCFLAGS='-D warnings' cargo doc --no-deps`
 6. `cargo audit`
 7. `git diff --check`
@@ -54,20 +54,22 @@ The current baseline passes:
 The manifest boundary also rejects structurally invalid dependency tables and
 handles valid TOML dependency declarations with optional whitespace.
 
-## 0.2 next phase
+## 0.2 structural clone matching
 
-Normalized AST structural matching is in progress:
+Normalized AST structural matching is complete:
 
 1. Versioned normalized AST-shape facts, hashes, node counts, and AST shingles
    are stored in function artifacts.
 2. Token shingles remain the bounded candidate-retrieval index.
 3. Clone matches require both token and AST similarity to meet the threshold.
 4. Clone findings report both component similarities.
-5. Calibration with at least 30 findings and a false-positive rate at or below
-   5% remains.
+5. Calibration produced 30 positive findings and 30 known-negative pairs with
+   zero false positives. The rule remains warning-only pending natural-history
+   calibration.
 
-Type-aware matching, control-flow graph similarity, arbitrary statement
-reordering, and cross-language matching remain deferred.
+The detailed evidence is in `docs/AST-CALIBRATION-REPORT.md`. Type-aware
+matching, control-flow graph similarity, arbitrary statement reordering, and
+cross-language matching remain deferred.
 
 ## Release state
 

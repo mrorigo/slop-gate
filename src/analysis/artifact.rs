@@ -253,6 +253,7 @@ mod tests {
         let file = analyze_rust_file("src/lib.rs", "fn answer() -> u8 { 42 }\n").unwrap();
         let artifact = IndexArtifact::new("a".repeat(40), vec![file]).unwrap();
         let encoded = artifact.to_json().unwrap();
+        assert_eq!(artifact.to_json().unwrap(), encoded);
         assert_eq!(IndexArtifact::from_json(&encoded).unwrap(), artifact);
     }
 

@@ -26,7 +26,8 @@ pull request ── slop-gate check ────────┴──► human, 
 
 Cyclomatic complexity (CC) counts independent control-flow paths. Source lines
 of code (SLOC) exclude blank and comment-only lines. Identifiers and literals
-are normalized before clone comparison, so a renamed copy still matches.
+are normalized before clone comparison, so a renamed copy still matches. Clone
+candidates must pass both normalized token and AST similarity thresholds.
 
 ## Install
 

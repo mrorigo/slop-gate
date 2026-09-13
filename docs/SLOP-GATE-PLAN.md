@@ -79,7 +79,7 @@ checked before evaluation.
 | **physical SLOC** | Count of non-blank lines within the function byte range after lines occupied solely by Tree-sitter comment nodes are excluded. A line containing code and a comment counts once. |
 | **cyclomatic complexity (CC)** | `1 +` the count of configured decision AST nodes in the function body, excluding nested named functions and closures. |
 | **normalized token stream** | Ordered syntax tokens with comments and whitespace removed; identifiers become `ID`; string, numeric, and character literals become `LIT`; punctuation and keywords are retained. |
-| **near clone** | Same-language functions whose normalized-token shingle Jaccard score and length criteria meet the configured rule. It is evidence of structural duplication, not semantic equivalence. |
+| **near clone** | Same-language functions whose token and normalized-AST shingle Jaccard scores and length criteria meet the configured rule. It is evidence of structural duplication, not semantic equivalence. |
 | **material change** | A function whose normalized structural hash changes. Formatting/comment-only changes are therefore not material. |
 | **violation** | A finding whose configured severity is `error`; warnings are reported but do not make `check` fail. |
 
@@ -269,6 +269,13 @@ result must be invariant under identifier renaming, literal changes, formatting,
 and comments. Hash the stream with BLAKE3. Generate k-token shingles, hash
 each with BLAKE3 truncated to `u64`, sort, and deduplicate them. Exact normalized
 hash equality may be reported as clone similarity `1.0` without a Jaccard pass.
+
+Artifact schema v2 also stores the normalized AST-shape BLAKE3 hash, node count,
+and five-node shingles. The representation preserves node and statement order,
+normalizes identifiers and literals, and excludes comments, attributes, and
+nested named functions. A clone finding requires both token-shingle and
+AST-shingle similarity to meet the configured threshold; this is structural
+evidence and not semantic equivalence.
 
 Candidate lookup is an in-memory `HashMap<u64, Vec<FunctionId>>` from shingle
 hash to artifact function IDs. For each evaluated function, tally shared
