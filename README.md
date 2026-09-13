@@ -157,9 +157,10 @@ Slop Gate complements, rather than replaces, the standard Rust checks.
 | `slop-gate check` | PR-introduced function growth and repository-scale duplication. |
 
 It does not prove semantic equivalence, assess security, replace a linter, or
-analyze uncommitted working-tree changes. A malformed changed Rust file produces
-an analyzer warning and is skipped. A malformed baseline prevents artifact
-creation.
+replace a linter. The `index` and `check` commands use immutable Git revisions.
+The `scan --working-tree` command analyzes local changes, including untracked
+non-ignored Rust files. A malformed changed Rust file produces an analyzer
+warning and is skipped. A malformed baseline prevents artifact creation.
 
 ## Develop
 

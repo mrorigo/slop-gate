@@ -1,13 +1,14 @@
 ---
 name: slop-gate
-description: Install and run Slop Gate for deterministic Rust code-quality checks in an agentic repository workflow. Use when an agent needs to create a baseline, evaluate commit-to-commit changes, scan a revision, or interpret gate results; do not use for dirty-working-tree analysis or non-Rust projects.
+description: Install and run Slop Gate for deterministic Rust code-quality checks in an agentic repository workflow. Use when an agent needs to create a baseline, evaluate commit-to-commit changes, scan a revision or working tree, or interpret gate results; do not use for non-Rust projects.
 ---
 
 # Slop Gate
 
 Use Slop Gate to detect newly introduced Rust function growth, near-clones,
 lint suppressions, unsafe surface, and production/build dependency surface.
-The tool evaluates Git revisions, not uncommitted working-tree edits.
+The `index` and `check` commands evaluate Git revisions. The `scan` command can
+also inspect uncommitted working-tree edits.
 
 ## Prerequisite
 
@@ -137,6 +138,8 @@ agent or reinterpret status `2` as a code-quality result.
 
 - Run `check` only against committed revisions. Commit intended changes before
   evaluating them; do not claim that an uncommitted tree passed.
+- Use `scan --working-tree` for local edits. It includes untracked non-ignored
+  Rust files and respects `.gitignore` unless `--no-ignore` is supplied.
 - Use the artifact matching `BASE`; a stale or policy-mismatched artifact must
   be rebuilt rather than bypassed.
 - Treat malformed baseline Rust, malformed configuration, malformed manifests,
