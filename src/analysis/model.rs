@@ -50,6 +50,10 @@ pub struct FunctionRecord {
     pub end_line: usize,
     /// BLAKE3 hash of the normalized token stream.
     pub normalized_hash: String,
+    /// BLAKE3 hash of the normalized AST-shape stream.
+    pub ast_hash: String,
+    /// Number of nodes in the normalized AST-shape stream.
+    pub ast_node_count: usize,
     /// Number of normalized tokens.
     pub token_count: usize,
     /// Non-blank, non-comment-only physical lines of source.
@@ -60,6 +64,8 @@ pub struct FunctionRecord {
     pub mass: f64,
     /// Sorted unique BLAKE3-truncated hashes of five-token shingles.
     pub shingle_hashes: Vec<u64>,
+    /// Sorted unique BLAKE3-truncated hashes of five-node AST shingles.
+    pub ast_shingle_hashes: Vec<u64>,
 }
 
 /// A normalized Rust lint-suppression observation.

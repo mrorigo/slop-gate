@@ -115,7 +115,7 @@ similarity_threshold = 0.85        # 0.0 <= threshold <= 1.0
 max_candidates = 64
 ```
 
-`IndexArtifact` is JSON for v1, compressed only by the CI transport layer. It
+`IndexArtifact` is JSON for v2, compressed only by the CI transport layer. It
 contains no source content and has this logical schema:
 
 ```text
@@ -128,8 +128,9 @@ files: [
 ]
 FunctionRecord:
   { identity, name, declaration_kind, start_line, end_line,
-    normalized_hash, token_count, sloc, cc, mass,
-    shingle_hashes: sorted unique u64[] }
+    normalized_hash, ast_hash, ast_node_count, token_count, sloc, cc, mass,
+    shingle_hashes: sorted unique u64[],
+    ast_shingle_hashes: sorted unique u64[] }
 ```
 
 The artifact must be rejected (exit code 2) if its version is unsupported, its

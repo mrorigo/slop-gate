@@ -201,7 +201,7 @@ pub(crate) fn check_mass(
                 );
             }
             if materially_changed
-                && let Some((candidate, similarity)) =
+                && let Some((candidate, token_similarity, ast_similarity)) =
                     clone_index.best_match(function, &config.rules.near_clone)
             {
                 push_if_enabled(
@@ -209,7 +209,8 @@ pub(crate) fn check_mass(
                     clone_finding(
                         function,
                         &candidate,
-                        similarity,
+                        token_similarity,
+                        ast_similarity,
                         config.rules.near_clone.similarity_threshold,
                     ),
                     config,
@@ -320,9 +321,17 @@ fn delta_finding(
 fn clone_finding(
     head: &FunctionRecord,
     candidate: &FunctionRecord,
-    similarity: f64,
+    token_similarity: f64,
+    ast_similarity: f64,
     threshold: f64,
 ) -> Finding {
+    let similarity = token_similarity.min(ast_similarity);
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "token_similarity".to_string(),
+        format!("{token_similarity:.6}"),
+    );
+    properties.insert("ast_similarity".to_string(), format!("{ast_similarity:.6}"));
     Finding {
         rule_id: "near-clone".to_string(),
         severity: Severity::Error,
@@ -345,7 +354,7 @@ fn clone_finding(
         delta: None,
         threshold: Some(threshold),
         similarity: Some(similarity),
-        properties: BTreeMap::new(),
+        properties,
     }
 }
 
@@ -591,14 +600,16 @@ pub(crate) fn scan_clones(artifact: &IndexArtifact, config: &GateConfig) -> Chec
     let mut index = CloneIndex::default();
     let mut report = CheckReport::default();
     for function in artifact.files.iter().flat_map(|file| file.functions.iter()) {
-        if let Some((candidate, similarity)) = index.best_match(function, &config.rules.near_clone)
+        if let Some((candidate, token_similarity, ast_similarity)) =
+            index.best_match(function, &config.rules.near_clone)
         {
             push_if_enabled(
                 &mut report,
                 clone_finding(
                     function,
                     &candidate,
-                    similarity,
+                    token_similarity,
+                    ast_similarity,
                     config.rules.near_clone.similarity_threshold,
                 ),
                 config,
@@ -637,7 +648,7 @@ impl CloneIndex {
         &self,
         function: &FunctionRecord,
         policy: &NearCloneRule,
-    ) -> Option<(FunctionRecord, f64)> {
+    ) -> Option<(FunctionRecord, f64, f64)> {
         if function.sloc < policy.minimum_sloc || function.token_count < policy.minimum_tokens {
             return None;
         }
@@ -656,7 +667,7 @@ impl CloneIndex {
                     .cmp(&candidate_key(&self.candidates[*right_id]))
             })
         });
-        let mut best: Option<(FunctionRecord, f64)> = None;
+        let mut best: Option<(FunctionRecord, f64, f64)> = None;
         for (id, _) in ids.into_iter().take(policy.max_candidates) {
             let candidate = &self.candidates[id];
             if candidate.identity == function.identity
@@ -665,21 +676,32 @@ impl CloneIndex {
             {
                 continue;
             }
-            let similarity = if candidate.normalized_hash == function.normalized_hash {
+            let token_similarity = if candidate.normalized_hash == function.normalized_hash {
                 1.0
             } else {
                 jaccard_similarity(&function.shingle_hashes, &candidate.shingle_hashes)
             };
-            if similarity < policy.similarity_threshold {
+            let ast_similarity = if candidate.ast_hash == function.ast_hash {
+                1.0
+            } else {
+                jaccard_similarity(&function.ast_shingle_hashes, &candidate.ast_shingle_hashes)
+            };
+            if token_similarity < policy.similarity_threshold
+                || ast_similarity < policy.similarity_threshold
+            {
                 continue;
             }
-            let should_replace = best.as_ref().is_none_or(|(current, current_similarity)| {
-                similarity > *current_similarity
-                    || (similarity == *current_similarity
-                        && candidate_key(candidate) < candidate_key(current))
-            });
+            let combined_similarity = token_similarity.min(ast_similarity);
+            let should_replace = best.as_ref().is_none_or(
+                |(current, current_token_similarity, current_ast_similarity)| {
+                    let current_combined = (*current_token_similarity).min(*current_ast_similarity);
+                    combined_similarity > current_combined
+                        || (combined_similarity == current_combined
+                            && candidate_key(candidate) < candidate_key(current))
+                },
+            );
             if should_replace {
-                best = Some((candidate.clone(), similarity));
+                best = Some((candidate.clone(), token_similarity, ast_similarity));
             }
         }
         best
@@ -769,7 +791,8 @@ mod tests {
     use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{bind_policy, build_artifact, check_mass, scan_clones};
+    use super::{CloneIndex, bind_policy, build_artifact, check_mass, scan_clones};
+    use crate::analysis::analyze_rust_file;
     use crate::config::GateConfig;
     use crate::git::GitRepository;
 
@@ -1249,6 +1272,8 @@ mod tests {
             .find(|finding| finding.rule_id == "near-clone")
             .unwrap();
         assert_eq!(clone.similarity, Some(1.0));
+        assert_eq!(clone.properties["token_similarity"], "1.000000");
+        assert_eq!(clone.properties["ast_similarity"], "1.000000");
     }
 
     #[test]
@@ -1278,6 +1303,33 @@ mod tests {
         let config = GateConfig::from_toml("[rules.near_clone]\nminimum_tokens = 10000\n").unwrap();
 
         assert!(scan_clones(&artifact, &config).findings.is_empty());
+    }
+
+    #[test]
+    fn clone_matching_requires_both_token_and_ast_signals() {
+        let source = clone_function("first", "input");
+        let candidate = analyze_rust_file("src/first.rs", &source)
+            .unwrap()
+            .functions
+            .into_iter()
+            .next()
+            .unwrap();
+        let mut subject = analyze_rust_file("src/second.rs", &clone_function("second", "value"))
+            .unwrap()
+            .functions
+            .into_iter()
+            .next()
+            .unwrap();
+        subject.ast_shingle_hashes.clear();
+        subject.ast_hash = "different".to_string();
+
+        let index = CloneIndex::from_functions([candidate]);
+        let config = GateConfig::default();
+        assert!(
+            index
+                .best_match(&subject, &config.rules.near_clone)
+                .is_none()
+        );
     }
 
     fn clone_function(name: &str, parameter: &str) -> String {

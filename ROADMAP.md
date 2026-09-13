@@ -2,7 +2,7 @@
 
 ## 0.2 enhancement plan: structural clone matching
 
-Status: **planned**. This phase improves same-language near-clone matching
+Status: **in progress**. This phase improves same-language near-clone matching
 without claiming semantic equivalence. The implementation remains Rust-only and
 uses Tree-sitter syntax trees without type resolution, name resolution, macro
 expansion, or control-flow graph construction.
@@ -21,6 +21,9 @@ and a false-positive corpus exist.
 
 ### P6.0: normalized AST facts
 
+Status: **complete**. Function artifacts now contain versioned normalized
+AST-shape hashes, node counts, and five-node AST shingles.
+
 For each extracted Rust function, compute a deterministic AST-shape stream and
 its BLAKE3 hash. The stream must:
 
@@ -35,6 +38,10 @@ version when the serialized representation changes. Older artifacts must fail
 with an actionable version error; no implicit migration is required.
 
 ### P6.1: bounded structural scoring
+
+Status: **in progress**. Token shingles still retrieve at most `64` candidates.
+Candidates must meet the configured threshold for both token and AST similarity.
+Findings report both component scores.
 
 Retain the existing sorted token-shingle index and candidate limit of `64`.
 Compute normalized AST five-node shingle sets only for retrieved candidates.
