@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Slop Gate is a deterministic Rust code-quality gate for code that is getting larger, more complex, or suspiciously similar.">
+  <meta name="theme-color" content="#10110f">
+  <title>Slop Gate — Keep the slop out</title>
+  <style>
+    @layer reset, base, components, utilities;
+
+    @layer reset {
+      *, *::before, *::after { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body, h1, h2, h3, p, ul, pre { margin: 0; }
+      button, a { font: inherit; }
+    }
+
+    @layer base {
+      :root {
+        --ink: oklch(18% 0.015 105);
+        --paper: oklch(93% 0.025 84);
+        --paper-dim: oklch(86% 0.035 84);
+        --acid: oklch(83% 0.19 113);
+        --coral: oklch(70% 0.17 35);
+        --blue: oklch(72% 0.14 222);
+        --line: color-mix(in oklch, var(--paper) 25%, transparent);
+        --muted: oklch(72% 0.02 90);
+        --display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+        --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        color: var(--paper);
+        background: var(--ink);
+        font-family: var(--mono);
+        font-size: 16px;
+        line-height: 1.5;
+      }
+
+      body {
+        min-width: 320px;
+        overflow-x: hidden;
+        background:
+          radial-gradient(circle at 82% 12%, oklch(28% 0.045 118 / .45), transparent 24rem),
+          radial-gradient(circle at 8% 48%, oklch(25% 0.06 220 / .22), transparent 30rem),
+          var(--ink);
+      }
+
+      body::before {
+        position: fixed;
+        z-index: 10;
+        inset: 0;
+        pointer-events: none;
+        opacity: .06;
+        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 160 160' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+        content: "";
+      }
+
+      a { color: inherit; text-decoration: none; }
+      ::selection { color: var(--ink); background: var(--acid); }
+    }
+
+    @layer components {
+      .shell { width: min(1180px, calc(100% - 3rem)); margin-inline: auto; }
+      .eyebrow { color: var(--acid); font-size: .72rem; letter-spacing: .16em; text-transform: uppercase; }
+      .mono-dim { color: var(--muted); font-size: .78rem; }
+
+      header {
+        position: relative;
+        z-index: 2;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .nav { display: flex; align-items: center; justify-content: space-between; min-height: 76px; }
+      .brand { display: inline-flex; align-items: center; gap: .7rem; font-weight: 700; letter-spacing: -.04em; }
+      .brand-mark { display: grid; width: 30px; height: 30px; place-items: center; color: var(--ink); background: var(--acid); transform: rotate(-6deg); }
+      .brand-mark span { font: 700 1rem/1 var(--mono); transform: rotate(6deg); }
+      .nav-links { display: flex; align-items: center; gap: 1.5rem; color: var(--muted); font-size: .75rem; }
+      .nav-links a { transition: color .18s ease; }
+      .nav-links a:hover, .nav-links a:focus-visible { color: var(--acid); }
+      .nav-cta { padding: .55rem .8rem; color: var(--ink) !important; background: var(--acid); }
+
+      .hero { position: relative; padding: clamp(5rem, 11vw, 9.5rem) 0 7rem; }
+      .hero-grid { display: grid; grid-template-columns: minmax(0, 1.02fr) minmax(340px, .98fr); gap: clamp(3rem, 7vw, 7rem); align-items: center; }
+      h1 { max-width: 8ch; margin: 1.25rem 0 1.8rem; color: var(--paper); font: 400 clamp(4.7rem, 10.5vw, 9.4rem)/.82 var(--display); letter-spacing: -.085em; }
+      h1 em { color: var(--acid); font-style: italic; }
+      .hero-copy { max-width: 35rem; color: var(--paper-dim); font-size: clamp(1rem, 1.5vw, 1.2rem); line-height: 1.7; }
+      .hero-actions { display: flex; flex-wrap: wrap; gap: .8rem; margin-top: 2.3rem; }
+      .button { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: .8rem 1rem; border: 1px solid var(--acid); color: var(--ink); background: var(--acid); font-size: .78rem; font-weight: 700; letter-spacing: .04em; transition: transform .18s ease, background .18s ease; }
+      .button:hover, .button:focus-visible { transform: translate(-3px, -3px); box-shadow: 4px 4px 0 var(--coral); }
+      .button.secondary { color: var(--paper); background: transparent; border-color: var(--line); }
+      .button.secondary:hover, .button.secondary:focus-visible { background: color-mix(in oklch, var(--paper) 8%, transparent); }
+
+      .terminal-wrap { position: relative; }
+      .terminal-wrap::before { position: absolute; z-index: -1; inset: 1.2rem -1.2rem -1.2rem 1.2rem; border: 1px solid color-mix(in oklch, var(--acid) 45%, transparent); content: ""; }
+      .terminal { overflow: hidden; border: 1px solid color-mix(in oklch, var(--paper) 28%, transparent); background: oklch(13% .015 105); box-shadow: 12px 12px 0 oklch(8% .01 105); }
+      .terminal-bar { display: flex; align-items: center; gap: .45rem; padding: .8rem 1rem; border-bottom: 1px solid var(--line); color: var(--muted); font-size: .7rem; }
+      .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--coral); }
+      .dot:nth-child(2) { background: var(--acid); }
+      .dot:nth-child(3) { background: var(--blue); }
+      .terminal-title { margin-left: auto; }
+      .terminal-body { padding: 1.3rem; font-size: .76rem; line-height: 1.8; }
+      .prompt { color: var(--acid); }
+      .command { color: var(--paper); }
+      .terminal-body hr { margin: 1rem 0; border: 0; border-top: 1px dashed var(--line); }
+      .finding { display: grid; grid-template-columns: 5rem 1fr; gap: .6rem; padding: .55rem 0; }
+      .finding strong { color: var(--coral); font-weight: 500; }
+      .finding span { color: var(--paper-dim); }
+      .pass { display: inline-block; margin-top: .8rem; padding: .2rem .4rem; color: var(--ink); background: var(--acid); font-weight: 700; }
+
+      .ticker { overflow: hidden; border-block: 1px solid var(--line); color: var(--acid); white-space: nowrap; }
+      .ticker-track { display: flex; width: max-content; animation: crawl 28s linear infinite; }
+      .ticker-item { padding: .85rem 1.2rem; font-size: .7rem; letter-spacing: .12em; text-transform: uppercase; }
+      .ticker-item::before { margin-right: 1.2rem; color: var(--coral); content: "✳"; }
+
+      section { padding: clamp(5rem, 10vw, 9rem) 0; }
+      .section-head { display: flex; justify-content: space-between; gap: 2rem; align-items: end; margin-bottom: 3rem; }
+      h2 { max-width: 11ch; color: var(--paper); font: 400 clamp(3rem, 6vw, 5.8rem)/.9 var(--display); letter-spacing: -.07em; }
+      .section-intro { max-width: 27rem; color: var(--muted); font-size: .85rem; line-height: 1.75; }
+
+      .feature-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 1px; border: 1px solid var(--line); background: var(--line); }
+      .feature { position: relative; min-height: 250px; padding: 1.5rem; background: var(--ink); }
+      .feature:nth-child(1) { grid-column: span 7; }
+      .feature:nth-child(2) { grid-column: span 5; }
+      .feature:nth-child(3) { grid-column: span 5; }
+      .feature:nth-child(4) { grid-column: span 7; }
+      .feature-index { color: var(--coral); font-size: .75rem; }
+      .feature h3 { margin: 3rem 0 .7rem; color: var(--paper); font: 400 2rem/1 var(--display); letter-spacing: -.045em; }
+      .feature p { max-width: 30rem; color: var(--muted); font-size: .8rem; line-height: 1.7; }
+      .feature::after { position: absolute; right: 1.5rem; bottom: 1.5rem; color: color-mix(in oklch, var(--paper) 20%, transparent); font: 2rem/1 var(--display); content: "↗"; }
+      .feature:hover { background: oklch(21% .02 105); }
+
+      .proof { display: grid; grid-template-columns: .8fr 1.2fr; gap: clamp(3rem, 9vw, 9rem); align-items: start; }
+      .quote { color: var(--paper); font: italic 400 clamp(2rem, 4vw, 3.6rem)/1.05 var(--display); letter-spacing: -.05em; }
+      .quote-mark { display: block; color: var(--acid); font: 5rem/.4 var(--display); }
+      .proof-notes { display: grid; gap: 1rem; }
+      .proof-note { display: grid; grid-template-columns: 7rem 1fr; gap: 1rem; padding: 1rem 0; border-top: 1px solid var(--line); }
+      .proof-note b { color: var(--acid); font-size: .7rem; font-weight: 400; letter-spacing: .08em; text-transform: uppercase; }
+      .proof-note p { color: var(--paper-dim); font-size: .85rem; }
+
+      .install { padding: clamp(2rem, 5vw, 4rem); color: var(--ink); background: var(--acid); }
+      .install-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: end; }
+      .install h2 { color: var(--ink); }
+      .install .eyebrow { color: color-mix(in oklch, var(--ink) 70%, transparent); }
+      .code-block { position: relative; padding: 1.3rem; border: 1px solid color-mix(in oklch, var(--ink) 30%, transparent); background: color-mix(in oklch, var(--ink) 90%, transparent); color: var(--paper); font-size: .8rem; }
+      .code-block code { display: block; overflow-x: auto; padding-right: 3rem; }
+      .copy { position: absolute; top: .7rem; right: .7rem; padding: .35rem .5rem; border: 1px solid var(--line); color: var(--paper); background: transparent; cursor: pointer; font-size: .65rem; }
+      .copy:hover, .copy:focus-visible { color: var(--ink); background: var(--acid); }
+
+      footer { padding: 2rem 0 3rem; border-top: 1px solid var(--line); }
+      .footer-row { display: flex; justify-content: space-between; gap: 1rem; color: var(--muted); font-size: .72rem; }
+      .footer-row a:hover { color: var(--acid); }
+
+      .reveal { animation: rise .8s both; animation-timeline: view(); animation-range: entry 0% cover 24%; }
+    }
+
+    @layer utilities {
+      .accent { color: var(--acid); }
+      .coral { color: var(--coral); }
+    }
+
+    @keyframes crawl { to { transform: translateX(-50%); } }
+    @keyframes rise { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+    }
+    @media (max-width: 760px) {
+      .shell { width: min(100% - 2rem, 42rem); }
+      .nav-links a:not(.nav-cta) { display: none; }
+      .hero { padding-top: 5rem; }
+      .hero-grid, .proof, .install-grid { grid-template-columns: 1fr; }
+      h1 { max-width: 7ch; font-size: clamp(4rem, 19vw, 7rem); }
+      .terminal-wrap { margin: 1rem .8rem 0 0; }
+      .feature:nth-child(n) { grid-column: span 12; min-height: 220px; }
+      .section-head { display: block; }
+      .section-intro { margin-top: 1.5rem; }
+      .footer-row { display: block; }
+      .footer-row > * + * { display: block; margin-top: .7rem; }
+    }
+
+    /* Single-screen console composition. */
+    .landing { height: 100svh; overflow: hidden; background: var(--ink); }
+    .landing header { height: 76px; }
+    .landing .hero-console { position: relative; isolation: isolate; height: calc(100svh - 76px); overflow: hidden; }
+    .hero-console::before { position: absolute; z-index: -2; inset: 0; background: linear-gradient(112deg, transparent 0 49.8%, color-mix(in oklch, var(--paper) 14%, transparent) 50%, transparent 50.2%), linear-gradient(180deg, transparent 0 84%, color-mix(in oklch, var(--acid) 12%, transparent) 84.1%, transparent 84.2%); content: ""; }
+    .hero-console::after { position: absolute; z-index: -3; right: -12vw; bottom: -25vw; width: 75vw; height: 75vw; border: 1px solid color-mix(in oklch, var(--acid) 24%, transparent); border-radius: 50%; content: ""; }
+    .scanline { position: absolute; z-index: -1; top: 0; bottom: 0; left: 50%; width: 1px; background: color-mix(in oklch, var(--paper) 12%, transparent); }
+    .console-label { position: absolute; color: var(--muted); font-size: .62rem; letter-spacing: .1em; line-height: 1.4; text-transform: uppercase; }
+    .label-a { top: 2.2rem; left: 3rem; color: var(--acid); }
+    .label-b { top: 2.2rem; right: 3rem; }
+    .label-c { bottom: 3rem; left: 3rem; }
+    .hero-copy-block { position: absolute; top: 50%; left: max(3rem, calc((100vw - 1180px) / 2)); width: min(35rem, 42vw); transform: translateY(-49%); }
+    .hero-copy-block h1 { max-width: none; margin: 1rem 0 1.5rem; font-size: clamp(5rem, 10vw, 9.5rem); line-height: .76; }
+    .hero-copy-block h1 span { margin-left: .7em; color: var(--acid); font-style: italic; }
+    .hero-copy-block .hero-copy { max-width: 24rem; font-size: .92rem; }
+    .hero-copy-block .hero-actions { margin-top: 1.7rem; }
+    .radar { position: absolute; top: 50%; left: 59%; width: min(42vw, 36rem); aspect-ratio: 1; transform: translate(-50%, -50%); }
+    .radar-ring, .radar-cross, .radar-sweep, .radar-dot, .radar-core { position: absolute; }
+    .radar-ring { inset: 0; border: 1px solid color-mix(in oklch, var(--acid) 35%, transparent); border-radius: 50%; }
+    .ring-two { inset: 14%; border-color: color-mix(in oklch, var(--paper) 16%, transparent); }
+    .ring-three { inset: 33%; border-color: color-mix(in oklch, var(--paper) 22%, transparent); }
+    .radar-cross { background: color-mix(in oklch, var(--paper) 18%, transparent); }
+    .cross-x { top: 50%; right: 0; left: 0; height: 1px; }
+    .cross-y { top: 0; bottom: 0; left: 50%; width: 1px; }
+    .radar-sweep { top: 0; left: 50%; width: 50%; height: 50%; transform-origin: 0 100%; background: linear-gradient(90deg, color-mix(in oklch, var(--acid) 30%, transparent), transparent 70%); clip-path: polygon(0 100%, 100% 0, 100% 100%); animation: sweep 5s linear infinite; }
+    .radar-core { top: 43%; left: 43%; display: grid; width: 14%; aspect-ratio: 1; place-items: center; border: 1px solid var(--acid); color: var(--acid); background: var(--ink); font-size: .7rem; }
+    .radar-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--coral); box-shadow: 0 0 0 5px color-mix(in oklch, var(--coral) 18%, transparent); animation: ping 2.4s ease-in-out infinite; }
+    .dot-one { top: 20%; left: 63%; }.dot-two { top: 65%; left: 25%; animation-delay: .7s; }.dot-three { top: 37%; left: 78%; animation-delay: 1.3s; }
+    .radar-tag { position: absolute; color: var(--muted); font-size: .6rem; letter-spacing: .13em; }
+    .tag-top { top: -1.5rem; left: 47%; }.tag-right { top: 48%; right: -3.5rem; }.tag-bottom { bottom: -1.5rem; left: 44%; }.tag-left { top: 48%; left: -2.5rem; }
+    .evidence { position: absolute; right: max(3rem, calc((100vw - 1180px) / 2)); bottom: 10%; width: min(25rem, 30vw); border: 1px solid color-mix(in oklch, var(--paper) 25%, transparent); background: oklch(13% .015 105 / .92); box-shadow: 8px 8px 0 color-mix(in oklch, var(--acid) 70%, transparent); font-size: .68rem; }
+    .evidence-head, .evidence-foot { display: flex; justify-content: space-between; padding: .75rem 1rem; color: var(--muted); font-size: .58rem; letter-spacing: .1em; }
+    .evidence-head { border-bottom: 1px solid var(--line); }.evidence-foot { border-top: 1px solid var(--line); color: var(--acid); }
+    .evidence-command { padding: 1rem; color: var(--paper-dim); }.evidence-command b { margin-right: .4rem; color: var(--acid); }
+    .evidence-row { display: grid; grid-template-columns: 2rem 1fr auto; gap: .5rem; padding: .38rem 1rem; color: var(--paper); }.evidence-row strong { color: var(--coral); font-weight: 400; }.evidence-row code { color: var(--acid); }.evidence-foot i { width: 7px; height: 7px; border-radius: 50%; background: var(--acid); }
+    .hero-bottom { position: absolute; right: 3rem; bottom: 3rem; left: 50%; display: flex; justify-content: space-between; color: var(--muted); font-size: .62rem; }.hero-bottom b { color: var(--acid); font-size: 1rem; font-weight: 400; }
+    @keyframes sweep { to { transform: rotate(360deg); } } @keyframes ping { 50% { box-shadow: 0 0 0 10px color-mix(in oklch, var(--coral) 0%, transparent); } }
+    @media (max-width: 900px) { .hero-copy-block { left: 2rem; width: 45vw; }.radar { left: 70%; width: 50vw; }.evidence { right: 2rem; width: 27vw; }.hero-bottom { left: 2rem; } }
+    @media (max-width: 650px) { .landing { overflow: hidden; height: 100svh; }.landing .hero-console { height: calc(100svh - 76px); min-height: 0; overflow: hidden; }.hero-copy-block { top: 31%; left: 1.2rem; width: 75vw; }.hero-copy-block h1 { font-size: clamp(4.5rem, 20vw, 7rem); }.hero-copy-block .hero-copy { max-width: 16rem; font-size: .78rem; }.hero-copy-block .hero-actions { display: grid; width: 9rem; }.radar { top: 62%; left: 72%; width: 64vw; }.evidence { right: 1.2rem; bottom: 5%; width: 60vw; }.console-label { font-size: .5rem; }.label-a { left: 1.2rem; }.label-b { right: 1.2rem; }.label-c { display: none; }.hero-bottom { display: none; }.nav-status { display: none; } }
+  </style>
+</head>
+<body class="landing">
+  <header>
+    <nav class="shell nav" aria-label="Main navigation">
+      <a class="brand" href="#top" aria-label="Slop Gate home"><span class="brand-mark" aria-hidden="true"><span>SG</span></span><span>slop-gate</span></a>
+      <div class="nav-links"><span class="nav-status"><i></i> gate status: armed</span><a href="https://github.com/mrorigo/slop-gate">GitHub ↗</a><a class="nav-cta" href="https://crates.io/crates/slop-gate">Install</a></div>
+    </nav>
+  </header>
+
+  <main id="top" class="hero-console">
+    <div class="scanline" aria-hidden="true"></div>
+    <div class="console-label label-a">SG / 0.3.0</div>
+    <div class="console-label label-b">RUST / LOCAL / DETERMINISTIC</div>
+    <div class="console-label label-c">NO MODELS<br>NO NETWORK</div>
+    <div class="hero-copy-block">
+      <p class="eyebrow">A code-quality gate with a suspicion reflex</p>
+      <h1>Code<br><span>under</span><br>oath.</h1>
+      <p class="hero-copy">Slop Gate checks what changed, finds what does not belong, and leaves you with evidence.</p>
+      <div class="hero-actions"><a class="button" href="https://crates.io/crates/slop-gate">Start scanning&nbsp; →</a><a class="button secondary" href="https://github.com/mrorigo/slop-gate">Read the source&nbsp; ↗</a></div>
+    </div>
+
+    <div class="radar" aria-label="Slop Gate scans for complexity, clones, unsafe code, and dependency growth">
+      <div class="radar-ring ring-one"></div><div class="radar-ring ring-two"></div><div class="radar-ring ring-three"></div><div class="radar-cross cross-x"></div><div class="radar-cross cross-y"></div><div class="radar-sweep"></div><div class="radar-dot dot-one"></div><div class="radar-dot dot-two"></div><div class="radar-dot dot-three"></div><div class="radar-core">SG</div>
+      <span class="radar-tag tag-top">MASS</span><span class="radar-tag tag-right">CLONES</span><span class="radar-tag tag-bottom">UNSAFE</span><span class="radar-tag tag-left">DEPS</span>
+    </div>
+
+    <aside class="evidence" aria-label="Example scan output">
+      <div class="evidence-head"><span>LIVE EVIDENCE</span><span>HEAD → WORKTREE</span></div>
+      <div class="evidence-command"><b>$</b> slop-gate scan --working-tree</div>
+      <div class="evidence-row"><strong>01</strong><span>near-clone</span><code>0.96</code></div>
+      <div class="evidence-row"><strong>02</strong><span>function-mass</span><code>+65.57</code></div>
+      <div class="evidence-row"><strong>03</strong><span>lint-suppression</span><code>new</code></div>
+      <div class="evidence-foot"><span>3 signals / 0 excuses</span><i></i></div>
+    </aside>
+
+    <div class="hero-bottom"><span>Built in Rust. Runs where your code runs.</span><span>Scroll not required <b>↗</b></span></div>
+  </main>
+
+  <script>
+    document.querySelectorAll('[data-copy]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        await navigator.clipboard.writeText(button.dataset.copy);
+        const original = button.textContent;
+        button.textContent = 'copied';
+        setTimeout(() => { button.textContent = original; }, 1400);
+      });
+    });
+  </script>
+</body>
+</html>
