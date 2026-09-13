@@ -186,7 +186,7 @@ impl GateConfig {
         Ok(blake3::hash(&encoded).to_hex().to_string())
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.version != CONFIG_VERSION {
             return Err(Error::invalid(
                 "configuration version",

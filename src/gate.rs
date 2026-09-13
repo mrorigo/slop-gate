@@ -1,7 +1,7 @@
 // Rust guideline compliant 2026-09-12
 //! Baseline artifact construction and function-mass gate evaluation.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::Serialize;
 
@@ -70,6 +70,24 @@ pub(crate) fn build_artifact(repository: &GitRepository, revision: &str) -> Resu
         .map(|path| {
             repository
                 .read_blob(&commit, &path)
+                .and_then(|source| analyze_rust_file(&path, &source))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    IndexArtifact::new(commit, files)
+}
+
+/// Builds an in-memory artifact from the current working tree.
+pub(crate) fn build_working_tree_artifact(
+    repository: &GitRepository,
+    include_ignored: bool,
+) -> Result<IndexArtifact> {
+    let commit = repository.resolve_revision("HEAD")?;
+    let files = repository
+        .working_tree_rust_files(include_ignored)?
+        .into_iter()
+        .map(|path| {
+            repository
+                .read_working_tree(&path)
                 .and_then(|source| analyze_rust_file(&path, &source))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -597,28 +615,229 @@ fn dependency_finding(
 
 /// Scans all functions in an artifact for structural duplication.
 pub(crate) fn scan_clones(artifact: &IndexArtifact, config: &GateConfig) -> CheckReport {
-    let mut index = CloneIndex::default();
+    let matches = collect_scan_matches(artifact, config);
+    let records = function_records(artifact);
+    let families = clone_families(&matches, &records);
     let mut report = CheckReport::default();
+    add_pair_findings(&mut report, matches, &families, config);
+    add_family_summaries(&mut report, &families, config);
+    report.findings.sort_by(finding_order);
+    report
+}
+
+fn collect_scan_matches(
+    artifact: &IndexArtifact,
+    config: &GateConfig,
+) -> Vec<(Finding, FunctionIdentity, FunctionIdentity)> {
+    let mut index = CloneIndex::default();
+    let mut matches = Vec::new();
     for function in artifact.files.iter().flat_map(|file| file.functions.iter()) {
         if let Some((candidate, token_similarity, ast_similarity)) =
             index.best_match(function, &config.rules.near_clone)
         {
-            push_if_enabled(
-                &mut report,
-                clone_finding(
-                    function,
-                    &candidate,
-                    token_similarity,
-                    ast_similarity,
-                    config.rules.near_clone.similarity_threshold,
-                ),
-                config,
+            let finding = clone_finding(
+                function,
+                &candidate,
+                token_similarity,
+                ast_similarity,
+                config.rules.near_clone.similarity_threshold,
             );
+            matches.push((finding, function.identity.clone(), candidate.identity));
         }
         index.insert(function.clone());
     }
-    report.findings.sort_by(finding_order);
+    matches
+}
+
+fn function_records(artifact: &IndexArtifact) -> HashMap<FunctionIdentity, FunctionRecord> {
+    artifact
+        .files
+        .iter()
+        .flat_map(|file| file.functions.iter())
+        .map(|function| (function.identity.clone(), function.clone()))
+        .collect()
+}
+
+fn add_pair_findings(
+    report: &mut CheckReport,
+    matches: Vec<(Finding, FunctionIdentity, FunctionIdentity)>,
+    families: &HashMap<FunctionIdentity, CloneFamily>,
+    config: &GateConfig,
+) {
+    for (mut finding, left, _right) in matches {
+        if let Some(family) = families.get(&left) {
+            finding
+                .properties
+                .insert("clone_family_id".to_string(), family.id.clone());
+        }
+        push_if_enabled(report, finding, config);
+    }
+}
+
+fn add_family_summaries(
+    report: &mut CheckReport,
+    families: &HashMap<FunctionIdentity, CloneFamily>,
+    config: &GateConfig,
+) {
+    let mut emitted_families = HashSet::new();
+    for family in families.values() {
+        if family.members.len() < 2 {
+            continue;
+        }
+        if !emitted_families.insert(family.id.clone()) {
+            continue;
+        }
+        let first = &family.members[0];
+        let second = &family.members[1];
+        let mut properties = BTreeMap::new();
+        properties.insert("finding_kind".to_string(), "family-summary".to_string());
+        properties.insert("clone_family_id".to_string(), family.id.clone());
+        properties.insert("member_count".to_string(), family.members.len().to_string());
+        properties.insert("duplicate_mass".to_string(), format!("{:.6}", family.mass));
+        push_if_enabled(
+            report,
+            Finding {
+                rule_id: "near-clone".to_string(),
+                severity: Severity::Error,
+                message: format!(
+                    "clone family contains {} functions with {:.2} duplicate mass",
+                    family.members.len(),
+                    family.mass
+                ),
+                location: Location {
+                    path: first.identity.path.clone(),
+                    line: first.start_line,
+                },
+                base_location: Some(Location {
+                    path: second.identity.path.clone(),
+                    line: second.start_line,
+                }),
+                base_mass: None,
+                head_mass: None,
+                delta: None,
+                threshold: Some(config.rules.near_clone.similarity_threshold),
+                similarity: None,
+                properties,
+            },
+            config,
+        );
+    }
+}
+
+/// Limits exploratory scan output to clone pairs while retaining their summaries.
+pub(crate) fn limit_scan_report(report: &mut CheckReport, top: usize) -> Result<()> {
+    if top == 0 {
+        return Err(Error::invalid("scan top", "must be positive"));
+    }
+    let (mut pairs, summaries): (Vec<_>, Vec<_>) = report
+        .findings
+        .drain(..)
+        .partition(|finding| !finding.properties.contains_key("finding_kind"));
+    let selected_families = pairs
+        .iter()
+        .take(top)
+        .filter_map(|finding| finding.properties.get("clone_family_id").cloned())
+        .collect::<HashSet<_>>();
+    pairs.truncate(top);
+    report.findings = pairs;
     report
+        .findings
+        .extend(summaries.into_iter().filter(|finding| {
+            finding
+                .properties
+                .get("clone_family_id")
+                .is_some_and(|family_id| selected_families.contains(family_id))
+        }));
+    Ok(())
+}
+
+struct CloneFamily {
+    id: String,
+    members: Vec<FunctionRecord>,
+    mass: f64,
+}
+
+fn clone_families(
+    matches: &[(Finding, FunctionIdentity, FunctionIdentity)],
+    records: &HashMap<FunctionIdentity, FunctionRecord>,
+) -> HashMap<FunctionIdentity, CloneFamily> {
+    let mut edges = Vec::new();
+    for (_finding, left, right) in matches {
+        edges.push((left.clone(), right.clone()));
+    }
+    let mut groups = HashMap::<FunctionIdentity, Vec<FunctionIdentity>>::new();
+    for identity in records.keys() {
+        let mut group = vec![identity.clone()];
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (left, right) in &edges {
+                if group.contains(left) || group.contains(right) {
+                    if !group.contains(left) {
+                        group.push(left.clone());
+                        changed = true;
+                    }
+                    if !group.contains(right) {
+                        group.push(right.clone());
+                        changed = true;
+                    }
+                }
+            }
+        }
+        group.sort_by(identity_order);
+        if let Some(first) = group.first() {
+            groups.insert(first.clone(), group);
+        }
+    }
+    groups
+        .into_values()
+        .map(|group| {
+            let id = format!("CF-{:016x}", stable_family_hash(&group));
+            let records = group
+                .iter()
+                .filter_map(|identity| records.get(identity).cloned())
+                .collect::<Vec<_>>();
+            let mass = records.iter().map(|record| record.mass).sum();
+            (
+                group,
+                CloneFamily {
+                    id,
+                    members: records,
+                    mass,
+                },
+            )
+        })
+        .flat_map(|(group, family)| {
+            group.into_iter().map(move |identity| {
+                (
+                    identity,
+                    CloneFamily {
+                        id: family.id.clone(),
+                        members: family.members.clone(),
+                        mass: family.mass,
+                    },
+                )
+            })
+        })
+        .collect()
+}
+
+fn identity_order(left: &FunctionIdentity, right: &FunctionIdentity) -> std::cmp::Ordering {
+    (&left.path, &left.qualified_name).cmp(&(&right.path, &right.qualified_name))
+}
+
+fn stable_family_hash(members: &[FunctionIdentity]) -> u64 {
+    let mut input = String::new();
+    for member in members {
+        input.push_str(&member.path);
+        input.push('\0');
+        input.push_str(&member.qualified_name);
+        input.push('\0');
+    }
+    let hash = blake3::hash(input.as_bytes());
+    let mut bytes = [0; 8];
+    bytes.copy_from_slice(&hash.as_bytes()[..8]);
+    u64::from_le_bytes(bytes)
 }
 
 #[derive(Debug, Default)]
@@ -649,9 +868,35 @@ impl CloneIndex {
         function: &FunctionRecord,
         policy: &NearCloneRule,
     ) -> Option<(FunctionRecord, f64, f64)> {
+        self.matches(function, policy).into_iter().next()
+    }
+
+    fn matches(
+        &self,
+        function: &FunctionRecord,
+        policy: &NearCloneRule,
+    ) -> Vec<(FunctionRecord, f64, f64)> {
         if function.sloc < policy.minimum_sloc || function.token_count < policy.minimum_tokens {
-            return None;
+            return Vec::new();
         }
+        let mut matches = self
+            .candidate_ids(function)
+            .into_iter()
+            .take(policy.max_candidates)
+            .filter_map(|id| self.score_candidate(id, function, policy))
+            .collect::<Vec<_>>();
+        matches.sort_by(
+            |(left, left_token, left_ast), (right, right_token, right_ast)| {
+                right_token
+                    .min(*right_ast)
+                    .total_cmp(&left_token.min(*left_ast))
+                    .then_with(|| candidate_key(left).cmp(&candidate_key(right)))
+            },
+        );
+        matches
+    }
+
+    fn candidate_ids(&self, function: &FunctionRecord) -> Vec<usize> {
         let mut overlap_counts = HashMap::<usize, usize>::new();
         for hash in &function.shingle_hashes {
             if let Some(ids) = self.by_shingle.get(hash) {
@@ -667,44 +912,35 @@ impl CloneIndex {
                     .cmp(&candidate_key(&self.candidates[*right_id]))
             })
         });
-        let mut best: Option<(FunctionRecord, f64, f64)> = None;
-        for (id, _) in ids.into_iter().take(policy.max_candidates) {
-            let candidate = &self.candidates[id];
-            if candidate.identity == function.identity
-                || candidate.sloc < policy.minimum_sloc
-                || candidate.token_count < policy.minimum_tokens
-            {
-                continue;
-            }
-            let token_similarity = if candidate.normalized_hash == function.normalized_hash {
-                1.0
-            } else {
-                jaccard_similarity(&function.shingle_hashes, &candidate.shingle_hashes)
-            };
-            let ast_similarity = if candidate.ast_hash == function.ast_hash {
-                1.0
-            } else {
-                jaccard_similarity(&function.ast_shingle_hashes, &candidate.ast_shingle_hashes)
-            };
-            if token_similarity < policy.similarity_threshold
-                || ast_similarity < policy.similarity_threshold
-            {
-                continue;
-            }
-            let combined_similarity = token_similarity.min(ast_similarity);
-            let should_replace = best.as_ref().is_none_or(
-                |(current, current_token_similarity, current_ast_similarity)| {
-                    let current_combined = (*current_token_similarity).min(*current_ast_similarity);
-                    combined_similarity > current_combined
-                        || (combined_similarity == current_combined
-                            && candidate_key(candidate) < candidate_key(current))
-                },
-            );
-            if should_replace {
-                best = Some((candidate.clone(), token_similarity, ast_similarity));
-            }
+        ids.into_iter().map(|(id, _)| id).collect()
+    }
+
+    fn score_candidate(
+        &self,
+        id: usize,
+        function: &FunctionRecord,
+        policy: &NearCloneRule,
+    ) -> Option<(FunctionRecord, f64, f64)> {
+        let candidate = &self.candidates[id];
+        if candidate.identity == function.identity
+            || candidate.sloc < policy.minimum_sloc
+            || candidate.token_count < policy.minimum_tokens
+        {
+            return None;
         }
-        best
+        let token_similarity = if candidate.normalized_hash == function.normalized_hash {
+            1.0
+        } else {
+            jaccard_similarity(&function.shingle_hashes, &candidate.shingle_hashes)
+        };
+        let ast_similarity = if candidate.ast_hash == function.ast_hash {
+            1.0
+        } else {
+            jaccard_similarity(&function.ast_shingle_hashes, &candidate.ast_shingle_hashes)
+        };
+        (token_similarity >= policy.similarity_threshold
+            && ast_similarity >= policy.similarity_threshold)
+            .then(|| (candidate.clone(), token_similarity, ast_similarity))
     }
 }
 
@@ -791,7 +1027,10 @@ mod tests {
     use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{CloneIndex, Severity, bind_policy, build_artifact, check_mass, scan_clones};
+    use super::{
+        CloneIndex, Severity, bind_policy, build_artifact, check_mass, limit_scan_report,
+        scan_clones,
+    };
     use crate::analysis::analyze_rust_file;
     use crate::config::GateConfig;
     use crate::git::GitRepository;
@@ -1288,8 +1527,32 @@ mod tests {
 
         let report = scan_clones(&artifact, &GateConfig::default());
         let repeated_report = scan_clones(&artifact, &GateConfig::default());
-        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings.len(), 2);
         assert_eq!(report.findings[0].rule_id, "near-clone");
+        assert!(report.findings.iter().any(|finding| {
+            finding
+                .properties
+                .get("finding_kind")
+                .is_some_and(|kind| kind == "family-summary")
+        }));
+        let mut limited = report.clone();
+        limit_scan_report(&mut limited, 1).unwrap();
+        assert_eq!(
+            limited
+                .findings
+                .iter()
+                .filter(|finding| !finding.properties.contains_key("finding_kind"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            limited
+                .findings
+                .iter()
+                .filter(|finding| finding.properties.contains_key("finding_kind"))
+                .count(),
+            1
+        );
         assert_eq!(
             serde_json::to_vec(&report).unwrap(),
             serde_json::to_vec(&repeated_report).unwrap()
@@ -1352,7 +1615,7 @@ mod tests {
         let calibration_artifact =
             build_artifact(&calibration_repository.repository(), "HEAD").unwrap();
         let calibration_report = scan_clones(&calibration_artifact, &config);
-        assert_eq!(calibration_report.findings.len(), 30);
+        assert_eq!(calibration_report.findings.len(), 31);
         assert!(calibration_report.findings.iter().all(
             |finding| finding.rule_id == "near-clone" && finding.severity == Severity::Warning
         ));

@@ -73,13 +73,19 @@ workflow is [`.github/workflows/slop-gate.yml`](.github/workflows/slop-gate.yml)
 
 ## Start with an audit
 
-Use `scan` before blocking a merge. It reports structural near-clones in one
-revision and helps calibrate thresholds.
+Use `scan` for a local repository audit. With no revision argument it scans
+`HEAD`; `--working-tree` includes untracked non-ignored Rust files and local
+edits. Git-ignored files remain excluded unless `--no-ignore` is supplied.
 
 ```sh
-slop-gate scan --ref HEAD --format human
+slop-gate scan --format human
+slop-gate scan --working-tree --path crates/core --top 20
 slop-gate scan --ref HEAD --format sarif > slop-gate.sarif
 ```
+
+Use `--threshold`, `--min-sloc`, and `--top` to tune exploratory output.
+Warning findings do not fail the command; configured error findings exit 1.
+Reports include pair findings and clone-family summaries with duplicate mass.
 
 Follow the [calibration protocol](docs/CALIBRATION.md) before changing a rule
 from `warn` to `error`.

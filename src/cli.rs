@@ -10,7 +10,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use crate::analysis::IndexArtifact;
 use crate::config::GateConfig;
 use crate::error::{Error, Result};
-use crate::gate::{bind_policy, build_artifact, check_mass, render_human, scan_clones};
+use crate::gate::{
+    bind_policy, build_artifact, build_working_tree_artifact, check_mass, limit_scan_report,
+    render_human, scan_clones,
+};
 use crate::git::GitRepository;
 use crate::sarif;
 
@@ -30,7 +33,25 @@ pub fn main() -> ExitCode {
             index,
             format,
         } => run_check(&base, &head, &index, format),
-        Command::Scan { ref_name, format } => run_scan(&ref_name, format),
+        Command::Scan {
+            ref_name,
+            working_tree,
+            path,
+            no_ignore,
+            threshold,
+            min_sloc,
+            top,
+            format,
+        } => run_scan(ScanOptions {
+            ref_name: ref_name.as_deref(),
+            working_tree,
+            paths: &path,
+            no_ignore,
+            threshold,
+            min_sloc,
+            top,
+            format,
+        }),
     }
 }
 
@@ -71,9 +92,27 @@ enum Command {
     },
     /// Audit one revision for structural near-clones.
     Scan {
-        /// Git revision to audit.
-        #[arg(long = "ref")]
-        ref_name: String,
+        /// Git revision to audit; defaults to HEAD.
+        #[arg(long = "ref", conflicts_with = "working_tree")]
+        ref_name: Option<String>,
+        /// Audit the current working tree, including untracked non-ignored files.
+        #[arg(long, conflicts_with = "ref_name")]
+        working_tree: bool,
+        /// Restrict analysis to a file or directory. Repeat for multiple paths.
+        #[arg(long, value_name = "PATH", action = clap::ArgAction::Append)]
+        path: Vec<PathBuf>,
+        /// Include files ignored by Git.
+        #[arg(long)]
+        no_ignore: bool,
+        /// Override the near-clone similarity threshold for this scan.
+        #[arg(long, value_name = "0.0..=1.0")]
+        threshold: Option<f64>,
+        /// Override the minimum function SLOC for this scan.
+        #[arg(long)]
+        min_sloc: Option<usize>,
+        /// Limit output to the top N clone pairs.
+        #[arg(long, value_name = "N")]
+        top: Option<usize>,
         /// Report encoding written to stdout.
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
@@ -168,18 +207,19 @@ fn run_check(base: &str, head: &str, index: &PathBuf, format: OutputFormat) -> E
 }
 
 /// Builds a revision artifact in memory and audits it for near-clones.
-fn run_scan(ref_name: &str, format: OutputFormat) -> ExitCode {
-    let result: Result<crate::gate::CheckReport> = (|| {
-        let current_dir = std::env::current_dir().map_err(|source| Error::Io {
-            operation: "determine current directory",
-            path: PathBuf::from("."),
-            source,
-        })?;
-        let repository = GitRepository::open(&current_dir)?;
-        let config = GateConfig::load(repository.root())?;
-        let artifact = build_artifact(&repository, ref_name)?;
-        Ok(scan_clones(&artifact, &config))
-    })();
+struct ScanOptions<'a> {
+    ref_name: Option<&'a str>,
+    working_tree: bool,
+    paths: &'a [PathBuf],
+    no_ignore: bool,
+    threshold: Option<f64>,
+    min_sloc: Option<usize>,
+    top: Option<usize>,
+    format: OutputFormat,
+}
+
+fn run_scan(options: ScanOptions<'_>) -> ExitCode {
+    let result = run_scan_result(&options);
     let report = match result {
         Ok(report) => report,
         Err(error) => {
@@ -187,7 +227,7 @@ fn run_scan(ref_name: &str, format: OutputFormat) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if let Err(error) = render_report(&report, format) {
+    if let Err(error) = render_report(&report, options.format) {
         write_error("scan", &error);
         return ExitCode::from(2);
     }
@@ -196,6 +236,84 @@ fn run_scan(ref_name: &str, format: OutputFormat) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+fn run_scan_result(options: &ScanOptions<'_>) -> Result<crate::gate::CheckReport> {
+    let current_dir = std::env::current_dir().map_err(|source| Error::Io {
+        operation: "determine current directory",
+        path: PathBuf::from("."),
+        source,
+    })?;
+    let repository = GitRepository::open(&current_dir)?;
+    let config = scan_config(options, repository.root())?;
+    let mut artifact = scan_artifact(options, &repository)?;
+    filter_artifact_paths(&mut artifact, repository.root(), options.paths)?;
+    let mut report = scan_clones(&artifact, &config);
+    if let Some(top) = options.top {
+        limit_scan_report(&mut report, top)?;
+    }
+    Ok(report)
+}
+
+fn scan_config(options: &ScanOptions<'_>, root: &std::path::Path) -> Result<GateConfig> {
+    let mut config = GateConfig::load(root)?;
+    if let Some(value) = options.threshold {
+        config.rules.near_clone.similarity_threshold = value;
+    }
+    if let Some(value) = options.min_sloc {
+        config.rules.near_clone.minimum_sloc = value;
+    }
+    config.validate()?;
+    Ok(config)
+}
+
+fn scan_artifact(options: &ScanOptions<'_>, repository: &GitRepository) -> Result<IndexArtifact> {
+    if options.working_tree {
+        build_working_tree_artifact(repository, options.no_ignore)
+    } else {
+        build_artifact(repository, options.ref_name.unwrap_or("HEAD"))
+    }
+}
+
+fn filter_artifact_paths(
+    artifact: &mut IndexArtifact,
+    root: &std::path::Path,
+    paths: &[PathBuf],
+) -> Result<()> {
+    let filters = paths
+        .iter()
+        .map(|path| {
+            let absolute = if path.is_absolute() {
+                path.clone()
+            } else {
+                root.join(path)
+            };
+            let relative = absolute.strip_prefix(root).map_err(|_| {
+                Error::invalid(
+                    "scan path",
+                    format!("{} is outside the repository", path.display()),
+                )
+            })?;
+            if !absolute.exists() {
+                return Err(Error::invalid(
+                    "scan path",
+                    format!("{} does not exist", path.display()),
+                ));
+            }
+            Ok(relative.to_string_lossy().replace('\\', "/"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if filters.is_empty() || filters.iter().any(String::is_empty) {
+        return Ok(());
+    }
+    artifact.files.retain(|file| {
+        filters.iter().any(|filter| {
+            file.path == *filter
+                || file.path.starts_with(filter)
+                    && file.path.as_bytes().get(filter.len()) == Some(&b'/')
+        })
+    });
+    Ok(())
 }
 
 /// Writes one report encoding to stdout.
