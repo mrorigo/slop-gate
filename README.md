@@ -19,14 +19,15 @@ pull request ── slop-gate check ────────┴──► human, 
 | Rule | Question it answers | Measurement |
 | --- | --- | --- |
 | `function-mass` | Did this change add too much function-level complexity? | `CC × √SLOC` and the change from the base function. |
-| `near-clone` | Did this pull request add an implementation that already exists? | Normalized syntax-token shingles and exact Jaccard similarity. |
+| `near-clone` | Did this pull request add an implementation that already exists? | Bounded token-shingle candidates requiring both normalized token and AST-shingle similarity. |
 | `lint-suppression-growth` | Did this change weaken a compiler or Clippy diagnostic? | Added or broadened `allow`/`expect` attributes. |
 | `unsafe-surface-growth` | Did this change add unsafe surface? | Added unsafe blocks, declarations, implementations, or extern blocks. |
 | `dependency-surface-growth` | Did this change expand production dependency surface? | New direct edges or added features/default features. |
 
 Cyclomatic complexity (CC) counts independent control-flow paths. Source lines
 of code (SLOC) exclude blank and comment-only lines. Identifiers and literals
-are normalized before clone comparison, so a renamed copy still matches.
+are normalized before clone comparison, so a renamed copy still matches. Clone
+candidates must pass both normalized token and AST similarity thresholds.
 
 ## Install
 
