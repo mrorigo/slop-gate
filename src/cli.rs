@@ -104,6 +104,15 @@ fn run_index(ref_name: &str, output: &PathBuf) -> ExitCode {
         let mut artifact = build_artifact(&repository, ref_name)?;
         bind_policy(&mut artifact, &config)?;
         let json = artifact.to_json()?;
+        if let Some(parent) = output.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|source| Error::Io {
+                operation: "create artifact directory",
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
         std::fs::write(output, json).map_err(|source| Error::Io {
             operation: "write artifact",
             path: output.clone(),
