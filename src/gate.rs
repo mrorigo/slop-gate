@@ -615,14 +615,22 @@ fn dependency_finding(
 
 /// Scans all functions in an artifact for structural duplication.
 pub(crate) fn scan_clones(artifact: &IndexArtifact, config: &GateConfig) -> CheckReport {
+    let matches = collect_scan_matches(artifact, config);
+    let records = function_records(artifact);
+    let families = clone_families(&matches, &records);
+    let mut report = CheckReport::default();
+    add_pair_findings(&mut report, matches, &families, config);
+    add_family_summaries(&mut report, &families, config);
+    report.findings.sort_by(finding_order);
+    report
+}
+
+fn collect_scan_matches(
+    artifact: &IndexArtifact,
+    config: &GateConfig,
+) -> Vec<(Finding, FunctionIdentity, FunctionIdentity)> {
     let mut index = CloneIndex::default();
     let mut matches = Vec::new();
-    let records = artifact
-        .files
-        .iter()
-        .flat_map(|file| file.functions.iter())
-        .map(|function| (function.identity.clone(), function.clone()))
-        .collect::<HashMap<_, _>>();
     for function in artifact.files.iter().flat_map(|file| file.functions.iter()) {
         if let Some((candidate, token_similarity, ast_similarity)) =
             index.best_match(function, &config.rules.near_clone)
@@ -638,16 +646,39 @@ pub(crate) fn scan_clones(artifact: &IndexArtifact, config: &GateConfig) -> Chec
         }
         index.insert(function.clone());
     }
-    let families = clone_families(&matches, &records);
-    let mut report = CheckReport::default();
+    matches
+}
+
+fn function_records(artifact: &IndexArtifact) -> HashMap<FunctionIdentity, FunctionRecord> {
+    artifact
+        .files
+        .iter()
+        .flat_map(|file| file.functions.iter())
+        .map(|function| (function.identity.clone(), function.clone()))
+        .collect()
+}
+
+fn add_pair_findings(
+    report: &mut CheckReport,
+    matches: Vec<(Finding, FunctionIdentity, FunctionIdentity)>,
+    families: &HashMap<FunctionIdentity, CloneFamily>,
+    config: &GateConfig,
+) {
     for (mut finding, left, _right) in matches {
         if let Some(family) = families.get(&left) {
             finding
                 .properties
                 .insert("clone_family_id".to_string(), family.id.clone());
         }
-        push_if_enabled(&mut report, finding, config);
+        push_if_enabled(report, finding, config);
     }
+}
+
+fn add_family_summaries(
+    report: &mut CheckReport,
+    families: &HashMap<FunctionIdentity, CloneFamily>,
+    config: &GateConfig,
+) {
     let mut emitted_families = HashSet::new();
     for family in families.values() {
         if family.members.len() < 2 {
@@ -664,7 +695,7 @@ pub(crate) fn scan_clones(artifact: &IndexArtifact, config: &GateConfig) -> Chec
         properties.insert("member_count".to_string(), family.members.len().to_string());
         properties.insert("duplicate_mass".to_string(), format!("{:.6}", family.mass));
         push_if_enabled(
-            &mut report,
+            report,
             Finding {
                 rule_id: "near-clone".to_string(),
                 severity: Severity::Error,
@@ -691,8 +722,6 @@ pub(crate) fn scan_clones(artifact: &IndexArtifact, config: &GateConfig) -> Chec
             config,
         );
     }
-    report.findings.sort_by(finding_order);
-    report
 }
 
 /// Limits exploratory scan output to clone pairs while retaining their summaries.
@@ -850,6 +879,24 @@ impl CloneIndex {
         if function.sloc < policy.minimum_sloc || function.token_count < policy.minimum_tokens {
             return Vec::new();
         }
+        let mut matches = self
+            .candidate_ids(function)
+            .into_iter()
+            .take(policy.max_candidates)
+            .filter_map(|id| self.score_candidate(id, function, policy))
+            .collect::<Vec<_>>();
+        matches.sort_by(
+            |(left, left_token, left_ast), (right, right_token, right_ast)| {
+                right_token
+                    .min(*right_ast)
+                    .total_cmp(&left_token.min(*left_ast))
+                    .then_with(|| candidate_key(left).cmp(&candidate_key(right)))
+            },
+        );
+        matches
+    }
+
+    fn candidate_ids(&self, function: &FunctionRecord) -> Vec<usize> {
         let mut overlap_counts = HashMap::<usize, usize>::new();
         for hash in &function.shingle_hashes {
             if let Some(ids) = self.by_shingle.get(hash) {
@@ -865,41 +912,35 @@ impl CloneIndex {
                     .cmp(&candidate_key(&self.candidates[*right_id]))
             })
         });
-        let mut matches = Vec::new();
-        for (id, _) in ids.into_iter().take(policy.max_candidates) {
-            let candidate = &self.candidates[id];
-            if candidate.identity == function.identity
-                || candidate.sloc < policy.minimum_sloc
-                || candidate.token_count < policy.minimum_tokens
-            {
-                continue;
-            }
-            let token_similarity = if candidate.normalized_hash == function.normalized_hash {
-                1.0
-            } else {
-                jaccard_similarity(&function.shingle_hashes, &candidate.shingle_hashes)
-            };
-            let ast_similarity = if candidate.ast_hash == function.ast_hash {
-                1.0
-            } else {
-                jaccard_similarity(&function.ast_shingle_hashes, &candidate.ast_shingle_hashes)
-            };
-            if token_similarity < policy.similarity_threshold
-                || ast_similarity < policy.similarity_threshold
-            {
-                continue;
-            }
-            matches.push((candidate.clone(), token_similarity, ast_similarity));
+        ids.into_iter().map(|(id, _)| id).collect()
+    }
+
+    fn score_candidate(
+        &self,
+        id: usize,
+        function: &FunctionRecord,
+        policy: &NearCloneRule,
+    ) -> Option<(FunctionRecord, f64, f64)> {
+        let candidate = &self.candidates[id];
+        if candidate.identity == function.identity
+            || candidate.sloc < policy.minimum_sloc
+            || candidate.token_count < policy.minimum_tokens
+        {
+            return None;
         }
-        matches.sort_by(
-            |(left, left_token, left_ast), (right, right_token, right_ast)| {
-                right_token
-                    .min(*right_ast)
-                    .total_cmp(&left_token.min(*left_ast))
-                    .then_with(|| candidate_key(left).cmp(&candidate_key(right)))
-            },
-        );
-        matches
+        let token_similarity = if candidate.normalized_hash == function.normalized_hash {
+            1.0
+        } else {
+            jaccard_similarity(&function.shingle_hashes, &candidate.shingle_hashes)
+        };
+        let ast_similarity = if candidate.ast_hash == function.ast_hash {
+            1.0
+        } else {
+            jaccard_similarity(&function.ast_shingle_hashes, &candidate.ast_shingle_hashes)
+        };
+        (token_similarity >= policy.similarity_threshold
+            && ast_similarity >= policy.similarity_threshold)
+            .then(|| (candidate.clone(), token_similarity, ast_similarity))
     }
 }
 

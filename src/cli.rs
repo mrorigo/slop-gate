@@ -219,33 +219,7 @@ struct ScanOptions<'a> {
 }
 
 fn run_scan(options: ScanOptions<'_>) -> ExitCode {
-    let result: Result<crate::gate::CheckReport> = (|| {
-        let current_dir = std::env::current_dir().map_err(|source| Error::Io {
-            operation: "determine current directory",
-            path: PathBuf::from("."),
-            source,
-        })?;
-        let repository = GitRepository::open(&current_dir)?;
-        let mut config = GateConfig::load(repository.root())?;
-        if let Some(value) = options.threshold {
-            config.rules.near_clone.similarity_threshold = value;
-        }
-        if let Some(value) = options.min_sloc {
-            config.rules.near_clone.minimum_sloc = value;
-        }
-        config.validate()?;
-        let mut artifact = if options.working_tree {
-            build_working_tree_artifact(&repository, options.no_ignore)?
-        } else {
-            build_artifact(&repository, options.ref_name.unwrap_or("HEAD"))?
-        };
-        filter_artifact_paths(&mut artifact, repository.root(), options.paths)?;
-        let mut report = scan_clones(&artifact, &config);
-        if let Some(top) = options.top {
-            limit_scan_report(&mut report, top)?;
-        }
-        Ok(report)
-    })();
+    let result = run_scan_result(&options);
     let report = match result {
         Ok(report) => report,
         Err(error) => {
@@ -261,6 +235,43 @@ fn run_scan(options: ScanOptions<'_>) -> ExitCode {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+fn run_scan_result(options: &ScanOptions<'_>) -> Result<crate::gate::CheckReport> {
+    let current_dir = std::env::current_dir().map_err(|source| Error::Io {
+        operation: "determine current directory",
+        path: PathBuf::from("."),
+        source,
+    })?;
+    let repository = GitRepository::open(&current_dir)?;
+    let config = scan_config(options, repository.root())?;
+    let mut artifact = scan_artifact(options, &repository)?;
+    filter_artifact_paths(&mut artifact, repository.root(), options.paths)?;
+    let mut report = scan_clones(&artifact, &config);
+    if let Some(top) = options.top {
+        limit_scan_report(&mut report, top)?;
+    }
+    Ok(report)
+}
+
+fn scan_config(options: &ScanOptions<'_>, root: &std::path::Path) -> Result<GateConfig> {
+    let mut config = GateConfig::load(root)?;
+    if let Some(value) = options.threshold {
+        config.rules.near_clone.similarity_threshold = value;
+    }
+    if let Some(value) = options.min_sloc {
+        config.rules.near_clone.minimum_sloc = value;
+    }
+    config.validate()?;
+    Ok(config)
+}
+
+fn scan_artifact(options: &ScanOptions<'_>, repository: &GitRepository) -> Result<IndexArtifact> {
+    if options.working_tree {
+        build_working_tree_artifact(repository, options.no_ignore)
+    } else {
+        build_artifact(repository, options.ref_name.unwrap_or("HEAD"))
     }
 }
 
