@@ -4,15 +4,18 @@ Date: 2026-09-12
 
 ## 0.1.0 baseline
 
-Slop Gate is a deterministic, repository-aware Rust code-quality gate. It
-analyzes immutable Git revisions and does not inspect dirty working-tree edits.
+Slop Gate is a deterministic, repository-aware Rust code-quality gate. Its
+`check` and `index` commands analyze immutable Git revisions; `scan` also
+supports local working-tree exploration.
 
 The CLI provides:
 
 - `index --ref <commit> --output <artifact>` to create a baseline artifact;
 - `check --base <commit> --head <commit> --index <artifact>` to evaluate
   introduced findings;
-- `scan --ref <commit>` to audit one revision for near-clones.
+- `scan` to audit `HEAD` for near-clones;
+- `scan --working-tree` to include untracked non-ignored Rust files and local
+  edits, with `--no-ignore` available for ignored files.
 
 Reports support `human`, `json`, and `sarif` formats. Exit status `0` means no
 error-severity findings, `1` means at least one error-severity finding, and `2`
@@ -73,6 +76,13 @@ cross-language matching remain deferred.
 
 ## Release state
 
-The Cargo package is `slop-gate` version `0.1.0`. The local `main` history has a
-Slop Gate 0.1.0 root commit followed by the roadmap and hardening follow-up.
-The remote state must be checked before any force-push or tag operation.
+The Cargo package is `slop-gate` version `0.2.0` on the structural-matching
+feature branch. The local `main` history contains the 0.1 baseline; the remote
+state must be checked before any force-push or tag operation.
+
+## 0.3 exploratory scanning
+
+Implementation is in progress on `features/exploratory-scan`. The branch adds
+default-`HEAD` scanning, working-tree discovery, path and threshold controls,
+top-N output limiting, and clone-family summaries. The detailed contract is in
+the 0.3 section of `ROADMAP.md`.

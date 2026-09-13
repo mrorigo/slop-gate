@@ -97,6 +97,38 @@ impl GitRepository {
         self.run_git(&["show", &specification])
     }
 
+    /// Lists Rust files visible in the working tree, including untracked files.
+    pub(crate) fn working_tree_rust_files(&self, include_ignored: bool) -> Result<Vec<String>> {
+        let mut paths = self
+            .run_git(&["ls-files", "--cached", "--others", "--exclude-standard"])?
+            .lines()
+            .filter(|path| path.ends_with(".rs") && is_relative_path(path))
+            .map(String::from)
+            .collect::<BTreeSet<_>>();
+        if include_ignored {
+            paths.extend(
+                self.run_git(&["ls-files", "--others", "--ignored", "--exclude-standard"])?
+                    .lines()
+                    .filter(|path| path.ends_with(".rs") && is_relative_path(path))
+                    .map(String::from),
+            );
+        }
+        Ok(paths.into_iter().collect())
+    }
+
+    /// Reads a UTF-8 Rust source file from the working tree.
+    pub(crate) fn read_working_tree(&self, path: &str) -> Result<String> {
+        if !is_relative_path(path) {
+            return Err(Error::invalid("Git path", format!("{path:?}")));
+        }
+        let absolute = self.root.join(path);
+        std::fs::read_to_string(&absolute).map_err(|source| Error::Io {
+            operation: "read working-tree source",
+            path: absolute,
+            source,
+        })
+    }
+
     /// Reads a revision blob, returning `None` when the path is absent.
     pub(crate) fn read_blob_if_exists(&self, revision: &str, path: &str) -> Result<Option<String>> {
         if !is_relative_path(path) {
@@ -350,7 +382,9 @@ fn is_relative_path(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::os::unix::process::ExitStatusExt;
+    use std::process::Command;
     use std::sync::Arc;
 
     use super::{ChangedLineSet, GitRepository, GitRunner, parse_added_lines};
@@ -411,6 +445,37 @@ mod tests {
     fn rejects_malformed_hunks_without_partial_results() {
         let result = parse_added_lines("@@ -1,1 +1,1 @@\n@@ malformed\n");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn working_tree_files_include_untracked_but_respect_ignore_rules() {
+        let path = std::env::temp_dir().join(format!("slop-gate-git-test-{}", std::process::id()));
+        fs::create_dir_all(path.join("src")).unwrap();
+        fs::write(path.join("src/tracked.rs"), "fn tracked() {}\n").unwrap();
+        fs::write(path.join("src/untracked.rs"), "fn untracked() {}\n").unwrap();
+        fs::write(path.join(".gitignore"), "ignored.rs\n").unwrap();
+        fs::write(path.join("ignored.rs"), "fn ignored() {}\n").unwrap();
+        run_test_git(&path, &["init", "--quiet"]);
+        run_test_git(&path, &["config", "user.email", "test@example.invalid"]);
+        run_test_git(&path, &["config", "user.name", "Slop Gate Test"]);
+        run_test_git(&path, &["add", "src/tracked.rs", ".gitignore"]);
+        run_test_git(&path, &["commit", "--quiet", "-m", "base"]);
+        let repository = GitRepository::open(&path).unwrap();
+
+        let visible = repository.working_tree_rust_files(false).unwrap();
+        assert_eq!(visible, ["src/tracked.rs", "src/untracked.rs"]);
+        let all = repository.working_tree_rust_files(true).unwrap();
+        assert_eq!(all, ["ignored.rs", "src/tracked.rs", "src/untracked.rs"]);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    fn run_test_git(path: &std::path::Path, arguments: &[&str]) {
+        let status = Command::new("git")
+            .args(arguments)
+            .current_dir(path)
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 
     #[test]

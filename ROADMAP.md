@@ -90,6 +90,53 @@ an error-capable gate only when the measured false-positive rate is at most
 3. General commutativity or statement-reordering rules.
 4. Cross-language structural matching.
 
+## 0.3 enhancement plan: exploratory repository scanning
+
+Status: **in progress**. This phase makes `scan` useful for local code-health
+exploration while preserving immutable revision semantics for `check` and
+artifact compatibility.
+
+### Product decisions
+
+1. `scan` defaults to `HEAD`; `--ref <commit>` remains available.
+2. `--working-tree` includes untracked Rust files and respects `.gitignore` by
+   default. `--no-ignore` includes ignored files.
+3. `--path` accepts files and directories and may be repeated.
+4. Exploratory thresholds do not affect artifact or policy fingerprints.
+5. Clone-pair findings are accompanied by deterministic clone-family summaries.
+6. Warning findings exit `0`; unsuppressed error findings exit `1`; operational
+   failures exit `2`, including for SARIF output.
+7. Duplicate mass counts each function once per clone family.
+
+### P7.0: scan controls
+
+Status: **in progress**. Add default revision selection, working-tree source
+collection, path filters, threshold overrides, and top-N pair limiting.
+
+### P7.1: clone-family reporting
+
+Emit pair findings with stable `clone_family_id` properties and one
+`finding_kind = "family-summary"` finding per connected family. Summary
+properties include `member_count` and `duplicate_mass`. Keep the existing
+`near-clone` rule ID.
+
+### P7.2: local report contract
+
+Document human, JSON, and SARIF exploratory output. Record effective scan
+thresholds in machine-readable output and preserve byte-identical output for
+identical inputs.
+
+### 0.3 acceptance criteria
+
+| Constraint | Criterion |
+| --- | --- |
+| Default use | `slop-gate scan` analyzes `HEAD`. |
+| Working tree | Untracked non-ignored Rust files are included; ignored files require `--no-ignore`. |
+| Filtering | Files and directories produce the same path-normalized selection. |
+| Ranking | `--top N` limits pair findings to exactly N while retaining relevant family summaries. |
+| Determinism | Identical inputs and options produce byte-identical JSON and SARIF. |
+| Compatibility | P5/P6 `check` behavior and artifact fingerprints remain unchanged. |
+
 ## Later candidates
 
 These items remain outside the 0.2 scope.
