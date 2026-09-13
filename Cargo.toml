@@ -1,6 +1,6 @@
 [package]
 name = "slop-gate"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Deterministic repository-aware code quality gates for CI"
 license = "MIT"
