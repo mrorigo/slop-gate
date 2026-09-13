@@ -29,7 +29,6 @@ jobs:
           fetch-depth: 0
       - uses: actions/cache/restore@v4
         with:
-          path: .slop-gate
           path: .slop-gate/index.json
           key: slop-gate-index-${{ github.event.pull_request.base.sha }}
       - uses: dtolnay/rust-toolchain@stable
