@@ -137,6 +137,28 @@ identical inputs.
 | Determinism | Identical inputs and options produce byte-identical JSON and SARIF. |
 | Compatibility | P5/P6 `check` behavior and artifact fingerprints remain unchanged. |
 
+## 0.3.2 maintenance fix: optional base blobs
+
+Status: **implementation complete; release pending**.
+
+When `check` compares a changed head path with its base revision, an absent
+base path is a normal state for newly added Rust files and manifests. The Git
+boundary must return `None` for Git's explicit missing-path diagnostics. It
+must preserve operational errors for invalid revisions and unrelated Git
+failures.
+
+### Acceptance criteria
+
+- A new Rust file produces no optional-blob operational error.
+- A new `Cargo.toml` produces `new-dependency` findings when it adds a direct
+  dependency.
+- A missing path in a valid revision returns `None` from the optional-blob
+  boundary.
+- Invalid revisions and unrelated Git failures remain errors with exit code
+  `2`.
+- The exact Warmplane scenario has an automated temporary-repository test.
+- Existing rename, delete, malformed-source, and artifact tests remain green.
+
 ## 0.3.1 enhancement plan: adopter experience
 
 Status: **implementation complete; release verification pending**. This
@@ -287,7 +309,7 @@ Admission criteria:
 
 ## Later candidates
 
-These items remain outside the current 0.3.1 and 0.4 scope.
+These items remain outside the current 0.3.2 and 0.4 scope.
 
 | Candidate | Why it is deferred | Admission condition |
 | --- | --- | --- |

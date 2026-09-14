@@ -2,6 +2,16 @@
 
 Date: 2026-09-14
 
+## 0.3.2 maintenance fix
+
+The current branch contains the v0.3.2 fix for optional base blobs. When a
+head revision adds a Rust file or package manifest, `check` treats the absent
+base path as an empty predecessor. Invalid revisions and unrelated Git errors
+remain operational failures.
+
+Validation for this fix includes 53 passing tests, including the Warmplane
+new-file Rust and manifest scenarios.
+
 ## 0.1.0 baseline
 
 Slop Gate is a deterministic, repository-aware Rust code-quality gate. Its
@@ -49,7 +59,7 @@ The current baseline passes:
 1. `cargo check`
 2. `cargo fmt --check`
 3. `cargo clippy --all-targets -- -D warnings`
-4. `cargo test` — 49 tests
+4. `cargo test` — 53 tests
 5. `RUSTDOCFLAGS='-D warnings' cargo doc --no-deps`
 6. `cargo audit`
 7. `git diff --check`

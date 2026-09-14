@@ -1064,6 +1064,16 @@ mod tests {
             git(&self.path, ["commit", "--quiet", "-m", "head"]);
         }
 
+        fn commit_new_file(&self, relative_path: &str, source: &str) {
+            let path = self.path.join(relative_path);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, source).unwrap();
+            git(&self.path, ["add", relative_path]);
+            git(&self.path, ["commit", "--quiet", "-m", "head"]);
+        }
+
         fn delete_source(&self) {
             git(&self.path, ["rm", "--quiet", "src/lib.rs"]);
             git(&self.path, ["commit", "--quiet", "-m", "delete"]);
@@ -1138,6 +1148,50 @@ mod tests {
         .unwrap();
         assert_eq!(report.findings.len(), 1);
         assert!(report.findings[0].base_mass.is_none());
+    }
+
+    #[test]
+    fn checks_a_new_rust_file_without_a_base_blob() {
+        let repository = TestRepository::new("fn existing() {}\n");
+        let git_repo = repository.repository();
+        let artifact = build_artifact(&git_repo, "HEAD").unwrap();
+        repository.commit_new_file("tests/common/mod.rs", "fn helper() {}\n");
+
+        let report = check_mass(
+            &git_repo,
+            "HEAD~1",
+            "HEAD",
+            &artifact,
+            &GateConfig::default(),
+        )
+        .unwrap();
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.rule_id == "analysis-error")
+        );
+    }
+
+    #[test]
+    fn checks_a_new_manifest_without_a_base_blob() {
+        let repository = TestRepository::new("fn existing() {}\n");
+        let git_repo = repository.repository();
+        let artifact = build_artifact(&git_repo, "HEAD").unwrap();
+        repository.commit_new_file("Cargo.toml", "[dependencies]\nserde = \"1\"\n");
+
+        let report = check_mass(
+            &git_repo,
+            "HEAD~1",
+            "HEAD",
+            &artifact,
+            &GateConfig::default(),
+        )
+        .unwrap();
+        assert!(report.findings.iter().any(|finding| {
+            finding.rule_id == "dependency-surface-growth"
+                && finding.properties["pattern_id"] == "new-dependency"
+        }));
     }
 
     #[test]

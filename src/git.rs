@@ -146,7 +146,7 @@ impl GitRepository {
                     detail: error.to_string(),
                 });
         }
-        if output.status.code() == Some(1) {
+        if is_missing_blob_diagnostic(&output.stderr) {
             return Ok(None);
         }
         Err(Error::Git {
@@ -270,6 +270,16 @@ impl GitRepository {
     }
 }
 
+fn is_missing_blob_diagnostic(stderr: &[u8]) -> bool {
+    let detail = String::from_utf8_lossy(stderr);
+    detail.lines().any(|line| {
+        let line = line.trim();
+        line.starts_with("fatal: path '")
+            && (line.contains(" does not exist in '")
+                || line.contains(" exists on disk, but not in '"))
+    })
+}
+
 /// Changed head paths and old-path mappings for detected renames.
 #[derive(Debug, Default)]
 pub(crate) struct ChangedFiles {
@@ -387,7 +397,9 @@ mod tests {
     use std::process::Command;
     use std::sync::Arc;
 
-    use super::{ChangedLineSet, GitRepository, GitRunner, parse_added_lines};
+    use super::{
+        ChangedLineSet, GitRepository, GitRunner, is_missing_blob_diagnostic, parse_added_lines,
+    };
 
     struct FakeGitRunner;
 
@@ -467,6 +479,49 @@ mod tests {
         let all = repository.working_tree_rust_files(true).unwrap();
         assert_eq!(all, ["ignored.rs", "src/tracked.rs", "src/untracked.rs"]);
         fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn optional_blob_returns_none_for_a_missing_path() {
+        let path = std::env::temp_dir().join(format!(
+            "slop-gate-optional-blob-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(path.join("src")).unwrap();
+        fs::write(path.join("src/lib.rs"), "fn existing() {}\n").unwrap();
+        run_test_git(&path, &["init", "--quiet"]);
+        run_test_git(&path, &["config", "user.email", "test@example.invalid"]);
+        run_test_git(&path, &["config", "user.name", "Slop Gate Test"]);
+        run_test_git(&path, &["add", "src/lib.rs"]);
+        run_test_git(&path, &["commit", "--quiet", "-m", "base"]);
+        let repository = GitRepository::open(&path).unwrap();
+
+        assert_eq!(
+            repository
+                .read_blob_if_exists("HEAD", "src/missing.rs")
+                .unwrap(),
+            None
+        );
+        assert!(
+            repository
+                .read_blob_if_exists("not-a-revision", "src/missing.rs")
+                .is_err()
+        );
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn missing_blob_detection_does_not_match_other_git_errors() {
+        assert!(is_missing_blob_diagnostic(
+            b"fatal: path 'tests/common/mod.rs' exists on disk, but not in 'abc'\n"
+        ));
+        assert!(is_missing_blob_diagnostic(
+            b"fatal: path 'tests/common/mod.rs' does not exist in 'abc'\n"
+        ));
+        assert!(!is_missing_blob_diagnostic(
+            b"fatal: invalid object name 'not-a-revision:src/missing.rs'.\n"
+        ));
     }
 
     fn run_test_git(path: &std::path::Path, arguments: &[&str]) {
