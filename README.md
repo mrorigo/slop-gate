@@ -37,6 +37,19 @@ Build from this checkout:
 cargo install --path .
 ```
 
+Install the published release from crates.io:
+
+```sh
+cargo install slop-gate --locked
+```
+
+If `cargo-binstall` is installed, it can download the matching release binary
+instead of compiling the crate:
+
+```sh
+cargo binstall slop-gate
+```
+
 Or run without installing:
 
 ```sh
@@ -44,6 +57,15 @@ cargo run --release -- --help
 ```
 
 The current supported gate language is Rust.
+
+Create a policy file with warning-only defaults:
+
+```sh
+slop-gate init
+```
+
+The command refuses to replace an existing `.slop-gate.toml`. Use
+`slop-gate init --force` only when replacement is intentional.
 
 ## Use it in CI
 
@@ -70,6 +92,10 @@ The current supported gate language is Rust.
 The artifact is tied to both the exact base commit and the active policy. A
 changed policy requires a rebuilt artifact. The reference GitHub Actions
 workflow is [`.github/workflows/slop-gate.yml`](.github/workflows/slop-gate.yml).
+It downloads and verifies the latest published Linux binary, so copying the
+workflow into another repository does not require adding Slop Gate to that
+repository's Cargo workspace. Set `SLOP_GATE_RELEASE` to a release tag to pin
+the tool version.
 
 ## Start with an audit
 
@@ -156,8 +182,8 @@ Slop Gate complements, rather than replaces, the standard Rust checks.
 | `cargo audit` | Dependency advisory checks. |
 | `slop-gate check` | PR-introduced function growth and repository-scale duplication. |
 
-It does not prove semantic equivalence, assess security, replace a linter, or
-replace a linter. The `index` and `check` commands use immutable Git revisions.
+It does not prove semantic equivalence, assess security, or replace a linter.
+The `index` and `check` commands use immutable Git revisions.
 The `scan --working-tree` command analyzes local changes, including untracked
 non-ignored Rust files. A malformed changed Rust file produces an analyzer
 warning and is skipped. A malformed baseline prevents artifact creation.

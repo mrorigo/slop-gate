@@ -92,7 +92,7 @@ an error-capable gate only when the measured false-positive rate is at most
 
 ## 0.3 enhancement plan: exploratory repository scanning
 
-Status: **in progress**. This phase makes `scan` useful for local code-health
+Status: **complete**. This phase makes `scan` useful for local code-health
 exploration while preserving immutable revision semantics for `check` and
 artifact compatibility.
 
@@ -110,7 +110,7 @@ artifact compatibility.
 
 ### P7.0: scan controls
 
-Status: **in progress**. Add default revision selection, working-tree source
+Status: **complete**. Add default revision selection, working-tree source
 collection, path filters, threshold overrides, and top-N pair limiting.
 
 ### P7.1: clone-family reporting
@@ -137,9 +137,157 @@ identical inputs.
 | Determinism | Identical inputs and options produce byte-identical JSON and SARIF. |
 | Compatibility | P5/P6 `check` behavior and artifact fingerprints remain unchanged. |
 
+## 0.3.1 enhancement plan: adopter experience
+
+Status: **implementation complete; release verification pending**. This
+maintenance release addresses the integration
+friction reported by an external Rust project. It must not change the default
+analysis rules or the `check` artifact contract.
+
+### Product decisions
+
+1. Consumer workflows must invoke an installed `slop-gate` binary. They must
+   not use `cargo run` unless Slop Gate is part of the consumer workspace.
+2. Release archives must use one documented naming scheme for every supported
+   target. Unsupported targets must be documented rather than implied.
+3. `cargo-binstall` metadata may point to GitHub release archives. It must use
+   the same target names and version tags as the release workflow.
+4. `init` writes only the policy file. It must not overwrite an existing file
+   unless the user passes an explicit force option.
+5. Existing exact-location suppressions remain valid when broader suppression
+   matching is added.
+
+### P8.0: consumer workflow and installation guidance
+
+Status: **complete locally**.
+
+Publish a ready-to-copy workflow for repositories that install Slop Gate from
+GitHub Releases or crates.io. The workflow must create an index from the base
+revision, run `check` against the head revision, and upload SARIF without
+assuming the consumer repository contains Slop Gate source code.
+
+Add installation guidance for `cargo install --locked`, prebuilt release
+archives, and `cargo-binstall` when metadata is available. Include the required
+permissions, artifact directory creation, and the behavior for missing base
+artifacts.
+
+Acceptance criteria:
+
+- A workflow copied into a repository without a Slop Gate dependency can run
+  `index` and `check` successfully.
+- The workflow does not invoke `cargo run` for Slop Gate.
+- The documented download URL is tested against a published release archive.
+- SARIF upload remains optional and does not hide a gate failure.
+
+### P8.1: release target and installer contract
+
+Status: **implementation complete; release verification pending**.
+
+Make the release matrix and installer metadata agree on supported targets and
+archive names. Version 0.3.x supports x86_64 and aarch64 Linux `gnu`, x86_64
+and aarch64 Linux `musl`, macOS ARM, and Windows x86_64. Do not advertise an
+archive that the workflow does not produce.
+
+Add `[package.metadata.binstall]` only after the archive URL and target mapping
+are tested. Document the minimum supported host targets and the fallback to
+Cargo compilation.
+
+Acceptance criteria:
+
+- Every documented archive URL resolves to an archive containing the
+  `slop-gate` executable.
+- Each archive name contains the release version and Rust target triple.
+- `cargo binstall slop-gate` resolves the expected archive for each supported
+  host target.
+- A release with a missing matrix artifact fails before publication.
+
+### P8.2: policy scaffolding command
+
+Status: **complete locally**.
+
+Add `slop-gate init` to create a commented, schema-valid `.slop-gate.toml`.
+The generated file must show the default severity, thresholds, and suppression
+syntax without enabling stricter policy values.
+
+Acceptance criteria:
+
+- `init` creates the file in the repository root.
+- Running `init` again fails without changing the existing file.
+- An explicit force option is required to replace an existing file.
+- The generated file passes the same validation used by analysis commands.
+- The command reports the output path and returns exit code `2` for operational
+  failures.
+
+## 0.4 enhancement plan: configurable exploration and policy scope
+
+Status: **planned**. These features reduce low-value findings in intentional
+test and generated-code regions without weakening diff-aware default gates.
+
+### P9.0: test-aware scan policy
+
+Support an explicit near-clone test policy. The first version should provide a
+single documented choice: exclude test code from exploratory near-clone scans.
+Test code includes paths selected by a configured test path pattern and Rust
+items under `#[cfg(test)]`. The default remains unchanged until calibration
+shows that exclusion improves review value.
+
+Do not silently exclude tests from `check`, mass findings, unsafe findings, or
+dependency findings. If separate test thresholds are later needed, specify
+them as independent policy fields with independent fingerprints.
+
+Acceptance criteria:
+
+- A test path and a `#[cfg(test)]` module can be excluded independently.
+- The default configuration produces the current result set.
+- Excluded functions do not contribute to clone families or duplicate mass.
+- The effective test policy appears in JSON and SARIF properties.
+- Policy changes invalidate incompatible index artifacts.
+
+### P9.1: directory-level suppression patterns
+
+Allow validated glob patterns in suppression paths, such as `tests/**`, while
+retaining exact path and line suppression. Define matching against normalized
+repository-relative paths. Reject malformed patterns and patterns that escape
+the repository path model.
+
+Acceptance criteria:
+
+- A matching directory pattern suppresses findings below that directory.
+- An exact path suppression continues to take precedence without changing its
+  behavior.
+- Pattern matching is deterministic across platforms.
+- Suppression patterns are included in the policy fingerprint.
+- Human, JSON, and SARIF reports identify that a finding was suppressed only
+  through the existing suppression accounting contract.
+
+### P9.2: official GitHub Action evaluation
+
+Evaluate a maintained composite action only after the workflow and installer
+contracts stabilize. The action would select or download a compatible binary,
+create the base artifact, run the requested gate, and optionally upload SARIF.
+It must not conceal the underlying command, revision, policy, or exit status.
+
+Admission criteria:
+
+- The copy-and-run workflow from P8.0 is stable for one release cycle.
+- The action has integration tests for installation, cache misses, cache hits,
+  missing artifacts, and SARIF upload failures.
+- Maintenance ownership and supported action runtime versions are documented.
+
+### 0.3.1 and 0.4 validation
+
+| Constraint | Criterion |
+| --- | --- |
+| Consumer compatibility | A clean consumer repository can install and run Slop Gate without adding it to its Cargo workspace. |
+| Release integrity | Published archive URLs, checksums, target triples, and installer metadata agree byte-for-byte where applicable; the release version is present in the URL or archive name. |
+| Safe initialization | `init` never overwrites policy without an explicit force option. |
+| Scope precision | Test and glob exclusions affect only the documented finding populations. |
+| Compatibility | Existing Rust analysis, `check`, artifact validation, and default scan behavior remain unchanged unless policy opts in. |
+| Determinism | Repeated runs with identical revisions, policy, paths, and options produce byte-identical machine-readable output. |
+
 ## Later candidates
 
-These items remain outside the 0.2 scope.
+These items remain outside the current 0.3.1 and 0.4 scope.
 
 | Candidate | Why it is deferred | Admission condition |
 | --- | --- | --- |

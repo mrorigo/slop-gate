@@ -1,6 +1,6 @@
 # Handoff
 
-Date: 2026-09-12
+Date: 2026-09-14
 
 ## 0.1.0 baseline
 
@@ -49,7 +49,7 @@ The current baseline passes:
 1. `cargo check`
 2. `cargo fmt --check`
 3. `cargo clippy --all-targets -- -D warnings`
-4. `cargo test` — 47 tests
+4. `cargo test` — 49 tests
 5. `RUSTDOCFLAGS='-D warnings' cargo doc --no-deps`
 6. `cargo audit`
 7. `git diff --check`
@@ -74,15 +74,37 @@ The detailed evidence is in `docs/AST-CALIBRATION-REPORT.md`. Type-aware
 matching, control-flow graph similarity, arbitrary statement reordering, and
 cross-language matching remain deferred.
 
-## Release state
-
-The Cargo package is `slop-gate` version `0.2.0` on the structural-matching
-feature branch. The local `main` history contains the 0.1 baseline; the remote
-state must be checked before any force-push or tag operation.
-
 ## 0.3 exploratory scanning
 
-Implementation is in progress on `features/exploratory-scan`. The branch adds
-default-`HEAD` scanning, working-tree discovery, path and threshold controls,
-top-N output limiting, and clone-family summaries. The detailed contract is in
-the 0.3 section of `ROADMAP.md`.
+The 0.3 implementation is complete. It provides default-`HEAD` scanning,
+working-tree discovery, path and threshold controls, top-N output limiting, and
+clone-family summaries. The detailed contract is in the 0.3 section of
+`ROADMAP.md`.
+
+## 0.3.1 adopter experience
+
+The 0.3.1 implementation is complete locally:
+
+1. The reference consumer workflow installs a published Linux binary, verifies
+   its checksum, creates `.slop-gate/`, and does not invoke consumer
+   `cargo run`.
+2. The release matrix publishes x86_64 and aarch64 Linux `gnu` builds, x86_64
+   and aarch64 Linux `musl` builds, macOS ARM, and Windows x86_64 archives.
+3. Cargo-binstall metadata maps release archives to supported target formats.
+4. `slop-gate init` creates a validated warning-only `.slop-gate.toml`, refuses
+   accidental replacement, and supports explicit `--force` replacement.
+5. README and the agent skill document published-crate, binary, binstall, and
+   initialization workflows.
+
+Local evidence:
+
+1. `cargo check --locked`
+2. `cargo fmt --check`
+3. `cargo clippy --all-targets --all-features --locked -- -D warnings`
+4. `cargo test --locked` — 49 tests
+5. `cargo package --locked --allow-dirty`
+6. YAML parsing for both GitHub workflows
+7. Temporary-repository tests for `init`, refusal, and `--force`
+
+The remaining release operation is to publish the `v0.3.1` tag and verify the
+archive URLs and binstall resolution against the resulting GitHub release.

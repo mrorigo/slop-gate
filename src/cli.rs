@@ -26,6 +26,7 @@ use crate::sarif;
 pub fn main() -> ExitCode {
     let args = Args::parse();
     match args.command {
+        Command::Init { force } => run_init(force),
         Command::Index { ref_name, output } => run_index(&ref_name, &output),
         Command::Check {
             base,
@@ -66,6 +67,12 @@ struct Args {
 /// Top-level product commands.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Create a warning-only repository policy file.
+    Init {
+        /// Replace an existing `.slop-gate.toml`.
+        #[arg(long)]
+        force: bool,
+    },
     /// Build a baseline analysis artifact for a Git revision.
     Index {
         /// Git revision to analyze.
@@ -119,6 +126,38 @@ enum Command {
     },
 }
 
+const POLICY_TEMPLATE: &str = r#"# Slop Gate policy. Missing values use warning-only defaults.
+version = 1
+
+[rules.function_mass]
+severity = "warn"          # off | warn | error
+new_function_limit = 80.0
+delta_limit = 20.0
+
+[rules.near_clone]
+severity = "warn"          # off | warn | error
+minimum_sloc = 8
+minimum_tokens = 40
+similarity_threshold = 0.85
+max_candidates = 64
+
+[rules.lint_suppression]
+severity = "warn"
+
+[rules.unsafe_surface]
+severity = "warn"
+
+[rules.dependency_surface]
+severity = "warn"
+
+# Add an exact-location exception only after review.
+# [[suppressions]]
+# rule = "near-clone"
+# path = "src/compat.rs"
+# line = 42
+# reason = "Protocol compatibility requires this implementation."
+"#;
+
 /// Report encoding for completed gate commands.
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum OutputFormat {
@@ -165,6 +204,76 @@ fn run_index(ref_name: &str, output: &PathBuf) -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// Creates the repository policy file without overwriting it by default.
+fn run_init(force: bool) -> ExitCode {
+    let result = (|| {
+        let path = init_policy(force)?;
+        write_init_message(&path)
+    })();
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            write_error("init", &error);
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn init_policy(force: bool) -> Result<PathBuf> {
+    let current_dir = std::env::current_dir().map_err(|source| Error::Io {
+        operation: "determine current directory",
+        path: PathBuf::from("."),
+        source,
+    })?;
+    let repository = GitRepository::open(&current_dir)?;
+    let path = repository.root().join(".slop-gate.toml");
+    GateConfig::from_toml(POLICY_TEMPLATE)?;
+    write_policy_file(&path, force)?;
+    Ok(path)
+}
+
+fn write_policy_file(path: &std::path::Path, force: bool) -> Result<()> {
+    if !force && path.exists() {
+        return Err(Error::invalid(
+            "configuration file",
+            format!(
+                "{} already exists; pass --force to replace it",
+                path.display()
+            ),
+        ));
+    }
+    if force {
+        return std::fs::write(path, POLICY_TEMPLATE).map_err(|source| Error::Io {
+            operation: "write configuration",
+            path: path.to_path_buf(),
+            source,
+        });
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|source| Error::Io {
+            operation: "create configuration",
+            path: path.to_path_buf(),
+            source,
+        })?;
+    file.write_all(POLICY_TEMPLATE.as_bytes())
+        .map_err(|source| Error::Io {
+            operation: "write configuration",
+            path: path.to_path_buf(),
+            source,
+        })
+}
+
+fn write_init_message(path: &std::path::Path) -> Result<()> {
+    writeln!(std::io::stdout().lock(), "created {}", path.display()).map_err(|source| Error::Io {
+        operation: "write command output",
+        path: PathBuf::from("stdout"),
+        source,
+    })
 }
 
 /// Loads an artifact, evaluates function mass, and renders the report.
@@ -371,7 +480,12 @@ mod tests {
             .get_subcommands()
             .map(|subcommand| subcommand.get_name())
             .collect();
-        assert_eq!(names, ["index", "check", "scan"]);
+        assert_eq!(names, ["init", "index", "check", "scan"]);
+    }
+
+    #[test]
+    fn policy_template_is_valid_configuration() {
+        super::GateConfig::from_toml(super::POLICY_TEMPLATE).unwrap();
     }
 
     #[test]
