@@ -48,6 +48,10 @@ jobs:
             target: aarch64-unknown-linux-musl
             ext: ""
             archive: tar.gz
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            ext: ""
+            archive: tar.gz
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             ext: ""
@@ -141,6 +145,8 @@ jobs:
             "slop-gate-aarch64-unknown-linux-gnu.tar.gz.sha256"
             "slop-gate-aarch64-unknown-linux-musl.tar.gz"
             "slop-gate-aarch64-unknown-linux-musl.tar.gz.sha256"
+            "slop-gate-x86_64-unknown-linux-musl.tar.gz"
+            "slop-gate-x86_64-unknown-linux-musl.tar.gz.sha256"
             "slop-gate-x86_64-pc-windows-msvc.zip"
             "slop-gate-x86_64-pc-windows-msvc.zip.sha256"
             "slop-gate-x86_64-unknown-linux-gnu.tar.gz"
@@ -163,8 +169,8 @@ jobs:
           done
 
           actual_count=$(find out -maxdepth 1 -type f | wc -l | tr -d ' ')
-          if [ "$actual_count" -ne 10 ]; then
-            echo "expected 10 release files, found $actual_count" >&2
+          if [ "$actual_count" -ne 12 ]; then
+            echo "expected 12 release files, found $actual_count" >&2
             ls -la out
             exit 1
           fi

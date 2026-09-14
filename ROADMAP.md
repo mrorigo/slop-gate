@@ -139,7 +139,8 @@ identical inputs.
 
 ## 0.3.1 enhancement plan: adopter experience
 
-Status: **planned**. This maintenance release addresses the integration
+Status: **implementation complete; release verification pending**. This
+maintenance release addresses the integration
 friction reported by an external Rust project. It must not change the default
 analysis rules or the `check` artifact contract.
 
@@ -157,6 +158,8 @@ analysis rules or the `check` artifact contract.
    matching is added.
 
 ### P8.0: consumer workflow and installation guidance
+
+Status: **complete locally**.
 
 Publish a ready-to-copy workflow for repositories that install Slop Gate from
 GitHub Releases or crates.io. The workflow must create an index from the base
@@ -178,9 +181,11 @@ Acceptance criteria:
 
 ### P8.1: release target and installer contract
 
+Status: **implementation complete; release verification pending**.
+
 Make the release matrix and installer metadata agree on supported targets and
-archive names. Decide whether Linux `gnu` is the only supported Linux target
-for 0.3.x or add both `x86_64` and `aarch64` `musl` builds. Do not advertise an
+archive names. Version 0.3.x supports x86_64 and aarch64 Linux `gnu`, x86_64
+and aarch64 Linux `musl`, macOS ARM, and Windows x86_64. Do not advertise an
 archive that the workflow does not produce.
 
 Add `[package.metadata.binstall]` only after the archive URL and target mapping
@@ -198,9 +203,11 @@ Acceptance criteria:
 
 ### P8.2: policy scaffolding command
 
+Status: **complete locally**.
+
 Add `slop-gate init` to create a commented, schema-valid `.slop-gate.toml`.
-The generated file must show the default severity, thresholds, scope, and
-suppression syntax without enabling stricter policy values.
+The generated file must show the default severity, thresholds, and suppression
+syntax without enabling stricter policy values.
 
 Acceptance criteria:
 
@@ -272,7 +279,7 @@ Admission criteria:
 | Constraint | Criterion |
 | --- | --- |
 | Consumer compatibility | A clean consumer repository can install and run Slop Gate without adding it to its Cargo workspace. |
-| Release integrity | Published archive names, URLs, checksums, target triples, and installer metadata agree byte-for-byte where applicable. |
+| Release integrity | Published archive URLs, checksums, target triples, and installer metadata agree byte-for-byte where applicable; the release version is present in the URL or archive name. |
 | Safe initialization | `init` never overwrites policy without an explicit force option. |
 | Scope precision | Test and glob exclusions affect only the documented finding populations. |
 | Compatibility | Existing Rust analysis, `check`, artifact validation, and default scan behavior remain unchanged unless policy opts in. |

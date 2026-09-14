@@ -31,6 +31,26 @@ slop-gate --version
 Installation may need network access. Do not reinstall on every invocation;
 reuse the installed binary when it is present.
 
+When `cargo-binstall` is available, use it for a prebuilt release binary:
+
+```sh
+cargo binstall slop-gate
+slop-gate --version
+```
+
+Use `cargo install` when the host target has no published binary archive.
+
+## Initialize policy
+
+Create a commented policy file with warning-only defaults:
+
+```sh
+slop-gate init
+```
+
+The command refuses to overwrite `.slop-gate.toml`. Use
+`slop-gate init --force` only when replacing the existing policy is intended.
+
 ## Agent workflow
 
 1. Check for `.slop-gate.toml` at the repository root. Respect its rule
@@ -76,6 +96,12 @@ reuse the installed binary when it is present.
    ```sh
    slop-gate scan --ref "$HEAD" --format json
    ```
+
+For a local pre-commit audit, include working-tree changes:
+
+```sh
+slop-gate scan --working-tree --format human
+```
 
 ## Configuration reference
 
