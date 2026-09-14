@@ -1,5 +1,14 @@
 # Slop Gate roadmap
 
+## 0.3.3 maintenance release
+
+Status: **implementation complete; release pending**.
+
+Near-clone evaluation now excludes base declarations that do not survive in
+`HEAD`. Changed and renamed origins are represented by their current head
+records, preventing moved or extracted functions from being reported against
+stale baseline bodies.
+
 ## 0.2 enhancement plan: structural clone matching
 
 Status: **complete**. This phase improves same-language near-clone matching

@@ -2,6 +2,15 @@
 
 Date: 2026-09-14
 
+## 0.3.3 maintenance release
+
+The v0.3.3 release fixes false-positive near-clone findings when a function is
+moved or extracted. Clone candidates now represent declarations surviving in
+`HEAD`; baseline records remain available for function-mass comparisons.
+
+Validation for this release includes 55 passing tests, including deleted-file
+and deleted-function move scenarios.
+
 ## 0.3.2 maintenance fix
 
 The current branch contains the v0.3.2 fix for optional base blobs. When a
