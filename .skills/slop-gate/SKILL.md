@@ -40,6 +40,25 @@ slop-gate --version
 
 Use `cargo install` when the host target has no published binary archive.
 
+## Add a status badge
+
+For a GitHub repository, copy the reference workflow from
+`.github/workflows/slop-gate.yml` into the adopter repository. Add this badge
+near the top of its `README.md`:
+
+```markdown
+[![Slop Gate passing](https://github.com/<owner>/<repo>/actions/workflows/slop-gate.yml/badge.svg)](https://github.com/<owner>/<repo>/actions/workflows/slop-gate.yml)
+```
+
+Replace `<owner>` and `<repo>` with the repository path. The badge reports the
+latest Slop Gate workflow status. It is a CI status indicator, not a permanent
+claim that the repository contains no duplication or complexity.
+
+Pin `SLOP_GATE_RELEASE` in the copied workflow when reproducible tool
+selection matters. The reference workflow verifies the downloaded binary
+checksum before running it. Enable the workflow on the default branch before
+adding the badge so GitHub can display its status.
+
 ## Initialize policy
 
 Create a commented policy file with warning-only defaults:

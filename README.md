@@ -3,6 +3,8 @@
 > A deterministic CI gate for code that is getting larger, more complex, or
 > suspiciously similar to code you already own.
 
+[![Slop Gate passing](https://github.com/mrorigo/slop-gate/actions/workflows/slop-gate.yml/badge.svg)](https://github.com/mrorigo/slop-gate/actions/workflows/slop-gate.yml)
+
 `slop-gate` reviews a pull request in repository context. It builds a compact
 baseline artifact from a trusted Git commit, then evaluates only changed Rust
 functions in the candidate commit. It runs locally, uses no model, and makes no
@@ -96,6 +98,24 @@ It downloads and verifies the latest published Linux binary, so copying the
 workflow into another repository does not require adding Slop Gate to that
 repository's Cargo workspace. Set `SLOP_GATE_RELEASE` to a release tag to pin
 the tool version.
+
+### Add a status badge
+
+Copy the reference workflow into `.github/workflows/slop-gate.yml`. Then add
+this badge near the top of your `README.md`:
+
+```markdown
+[![Slop Gate passing](https://github.com/<owner>/<repo>/actions/workflows/slop-gate.yml/badge.svg)](https://github.com/<owner>/<repo>/actions/workflows/slop-gate.yml)
+```
+
+Replace `<owner>` and `<repo>` with the repository path. The badge reports the
+status of the latest Slop Gate workflow run. It is a CI status indicator, not a
+permanent claim that the repository contains no duplication or complexity.
+
+Pin `SLOP_GATE_RELEASE` in the copied workflow when reproducible tool
+selection matters. The workflow verifies the downloaded binary checksum before
+running it. Enable the workflow on the default branch before adding the badge
+so GitHub can display its status.
 
 ## Start with an audit
 
