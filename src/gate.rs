@@ -134,18 +134,18 @@ pub(crate) fn check_mass(
         .flat_map(|file| file.functions.iter())
         .map(|function| (function.identity.clone(), function))
         .collect::<HashMap<_, _>>();
-    let mut clone_index = CloneIndex::from_functions(
-        artifact
-            .files
-            .iter()
-            .flat_map(|file| file.functions.iter().cloned()),
-    );
     let mut report = CheckReport::default();
 
+    // Analyze changed files before building clone candidates so candidates
+    // represent declarations that still exist in HEAD. Baseline records are
+    // retained separately for mass-delta comparisons below.
+    let mut head_files = HashMap::new();
     for path in &changed.paths {
         let source = repository.read_blob(&head_commit, path)?;
-        let file = match analyze_rust_file(path, &source) {
-            Ok(file) => file,
+        match analyze_rust_file(path, &source) {
+            Ok(file) => {
+                head_files.insert(path.clone(), file);
+            }
             Err(error) => {
                 report.findings.push(Finding {
                     rule_id: "analysis-error".to_string(),
@@ -163,9 +163,62 @@ pub(crate) fn check_mass(
                     similarity: None,
                     properties: BTreeMap::new(),
                 });
-                continue;
             }
+        }
+    }
+
+    let head_paths = repository
+        .rust_files(&head_commit)?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let changed_base_paths = changed
+        .renamed_from
+        .values()
+        .chain(changed.paths.iter())
+        .collect::<HashSet<_>>();
+    let head_functions_by_base_identity = head_files
+        .values()
+        .flat_map(|file| {
+            let previous_path = changed.renamed_from.get(&file.path);
+            file.functions.iter().map(move |function| {
+                (
+                    renamed_identity(&function.identity, previous_path),
+                    function,
+                )
+            })
+        })
+        .collect::<HashMap<_, _>>();
+    let clone_candidates = artifact
+        .files
+        .iter()
+        .flat_map(|file| file.functions.iter())
+        .filter_map(|base_function| {
+            let head_path = changed
+                .renamed_from
+                .iter()
+                .find_map(|(new_path, old_path)| {
+                    (old_path == &base_function.identity.path).then_some(new_path)
+                })
+                .unwrap_or(&base_function.identity.path);
+            if !head_paths.contains(head_path) {
+                return None;
+            }
+            if changed_base_paths.contains(&base_function.identity.path) {
+                head_functions_by_base_identity
+                    .get(&base_function.identity)
+                    .map(|function| (*function).clone())
+            } else {
+                Some(base_function.clone())
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut clone_index = CloneIndex::from_functions(clone_candidates);
+
+    for path in &changed.paths {
+        let Some(file) = head_files.get(path) else {
+            continue;
         };
+        let source = repository.read_blob(&head_commit, path)?;
         evaluate_lint_suppressions(
             repository,
             &base_commit,
@@ -1170,6 +1223,55 @@ mod tests {
                 .findings
                 .iter()
                 .any(|finding| finding.rule_id == "analysis-error")
+        );
+    }
+
+    #[test]
+    fn ignores_a_clone_moved_from_a_deleted_file() {
+        let helper = clone_function("helper", "input");
+        let repository = TestRepository::new(&helper);
+        let git_repo = repository.repository();
+        let artifact = build_artifact(&git_repo, "HEAD").unwrap();
+        repository.commit_source("fn existing() {}\n");
+        repository.commit_new_file("tests/common/mod.rs", &helper);
+
+        let report = check_mass(
+            &git_repo,
+            "HEAD~2",
+            "HEAD",
+            &artifact,
+            &GateConfig::default(),
+        )
+        .unwrap();
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.rule_id == "near-clone")
+        );
+    }
+
+    #[test]
+    fn ignores_a_clone_moved_from_a_deleted_function() {
+        let helper = clone_function("helper", "input");
+        let repository = TestRepository::new(&format!("{helper}\nfn existing() {{}}\n"));
+        let git_repo = repository.repository();
+        let artifact = build_artifact(&git_repo, "HEAD").unwrap();
+        repository.commit_source(&format!("fn existing() {{}}\n{helper}"));
+
+        let report = check_mass(
+            &git_repo,
+            "HEAD~1",
+            "HEAD",
+            &artifact,
+            &GateConfig::default(),
+        )
+        .unwrap();
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.rule_id == "near-clone")
         );
     }
 

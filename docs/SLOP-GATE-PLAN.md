@@ -200,6 +200,16 @@ Then emit one near-clone finding locating H and C
 Given H and C have the same function identity
 When check compares the changed function to its predecessor
 Then C is excluded from clone candidates
+
+Given H is a new or materially changed function
+And a base candidate C has no corresponding declaration in head
+When check evaluates near-clones
+Then C is excluded from clone candidates
+
+Given a base candidate C has a corresponding declaration in a changed or
+renamed head file
+When check evaluates near-clones
+Then the current head declaration is used as the clone candidate
 ```
 
 **Git state**
@@ -227,6 +237,8 @@ Then it emits an analyzer warning, skips rules for that file, and exits 1 only i
 | Head function | present | no | any | no mass finding |
 | Head function | absent/present | material | clone thresholds satisfied | clone finding |
 | Head function | absent/present | no | any | excluded from clone evaluation |
+| Base candidate | absent in head | any | any | excluded from clone candidates |
+| Base candidate | present in changed/renamed head file | any | any | use current head record |
 | Unsupported/deleted file | n/a | n/a | any | no rule finding; optional scope diagnostic |
 
 ## Analysis design
