@@ -1,6 +1,6 @@
 # Structural erosion calibration
 
-Status: preliminary local evidence only.
+Status: preliminary panel evidence; not a threshold decision.
 
 ## Implemented measurement
 
@@ -26,6 +26,25 @@ The observed erosion ratios were approximately `0.3973`, `0.3925`, and
 `0.4367`. This sample is not a calibration set. It contains one repository and
 adjacent development commits. It cannot establish thresholds or a
 false-positive rate.
+
+## P9.4 panel run
+
+On 2026-09-15, the calibration runner attempted the 20 repositories listed in
+`calibration/manifest.toml`. Ten repositories produced 20 valid commit records
+each, for 200 valid samples. The remaining repositories produced incomplete
+records because historical revisions contained syntax-invalid Rust or the
+checkout/analysis could not complete. Those records remain in
+`calibration/results/` and are not treated as zero measurements.
+
+For the 200 valid samples, erosion delta ranged from `-0.0157402` to
+`0.0086378`; the median was `0`, and no sample exceeded the provisional `0.08`
+delta limit. This is a runner smoke test, not threshold calibration: it is a
+bounded first-parent window rather than the required monthly, release, and
+high-churn sample, and it contains no reviewer classifications or contributor
+stability judgments.
+
+The run therefore does not satisfy the plan's threshold-decision criteria.
+The rule remains warning-only.
 
 ## Release gate
 

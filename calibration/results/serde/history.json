@@ -1,5 +1,69 @@
 [
   {
+    "commit": "681270e4f096288afb3f57a35d440f4103b45c24",
+    "total_mass": 15501.637021758135,
+    "erosion_ratio": 0.4110582808989883,
+    "high_complexity_function_count": 31,
+    "maximum_function_cc": 91,
+    "maximum_function_mass": 1522.7212482920174
+  },
+  {
+    "commit": "888de679213921716e4528d5ec5ff8a0d3b9c3e6",
+    "total_mass": 15619.891299863566,
+    "erosion_ratio": 0.4191255704750941,
+    "high_complexity_function_count": 32,
+    "maximum_function_cc": 91,
+    "maximum_function_mass": 1522.7212482920174
+  },
+  {
+    "commit": "3587aed5d424cb2e9be0b632e3844e64654be709",
+    "total_mass": 15664.492945214146,
+    "erosion_ratio": 0.4277633419255673,
+    "high_complexity_function_count": 33,
+    "maximum_function_cc": 91,
+    "maximum_function_mass": 1522.7212482920174
+  },
+  {
+    "commit": "5fd91333c7dc942a2f54539b17982f0c5bbc0790",
+    "total_mass": 15664.492945214146,
+    "erosion_ratio": 0.4277633419255673,
+    "high_complexity_function_count": 33,
+    "maximum_function_cc": 91,
+    "maximum_function_mass": 1522.7212482920174
+  },
+  {
+    "commit": "789334771f879ce86383cd1cf4698458b3592551",
+    "total_mass": 15664.492945214146,
+    "erosion_ratio": 0.4277633419255673,
+    "high_complexity_function_count": 33,
+    "maximum_function_cc": 91,
+    "maximum_function_mass": 1522.7212482920174
+  },
+  {
+    "commit": "9d17f29523a06fdb43b5795fd7a39661a08ef481",
+    "total_mass": 15671.911228617795,
+    "erosion_ratio": 0.42756086057828263,
+    "high_complexity_function_count": 33,
+    "maximum_function_cc": 91,
+    "maximum_function_mass": 1522.7212482920174
+  },
+  {
+    "commit": "e65b3e742063c7353ff5b1feea61aef5030b92bc",
+    "total_mass": 15699.62850107493,
+    "erosion_ratio": 0.4267586769235654,
+    "high_complexity_function_count": 33,
+    "maximum_function_cc": 91,
+    "maximum_function_mass": 1522.7212482920174
+  },
+  {
+    "commit": "dd18663450ec3ee38e35e3a4ee141932614e662c",
+    "total_mass": 15699.62850107493,
+    "erosion_ratio": 0.4267586769235654,
+    "high_complexity_function_count": 33,
+    "maximum_function_cc": 91,
+    "maximum_function_mass": 1522.7212482920174
+  },
+  {
     "commit": "6b1a17851ea3d86a56aa116ca1cbf428f8d5f22d",
     "total_mass": 15699.62850107493,
     "erosion_ratio": 0.4267586769235654,

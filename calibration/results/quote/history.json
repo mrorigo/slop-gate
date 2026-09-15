@@ -1,5 +1,69 @@
 [
   {
+    "commit": "93d691cce95b31c607be7a2aef2a784abc60b525",
+    "total_mass": 393.01764598383915,
+    "erosion_ratio": 0.0,
+    "high_complexity_function_count": 0,
+    "maximum_function_cc": 6,
+    "maximum_function_mass": 18.973665961010276
+  },
+  {
+    "commit": "842ffde933fdd76cd1681a288bed136d8b95a97a",
+    "total_mass": 393.01764598383915,
+    "erosion_ratio": 0.0,
+    "high_complexity_function_count": 0,
+    "maximum_function_cc": 6,
+    "maximum_function_mass": 18.973665961010276
+  },
+  {
+    "commit": "ba07807af385afeff97a5e75186f7a92eb629a79",
+    "total_mass": 393.01764598383915,
+    "erosion_ratio": 0.0,
+    "high_complexity_function_count": 0,
+    "maximum_function_cc": 6,
+    "maximum_function_mass": 18.973665961010276
+  },
+  {
+    "commit": "73fc98dda72cc3fdb10b0bdd8cf4783ba27a61e9",
+    "total_mass": 393.01764598383915,
+    "erosion_ratio": 0.0,
+    "high_complexity_function_count": 0,
+    "maximum_function_cc": 6,
+    "maximum_function_mass": 18.973665961010276
+  },
+  {
+    "commit": "0b33821245d285d764e0d3ea4a77093004148872",
+    "total_mass": 393.01764598383915,
+    "erosion_ratio": 0.0,
+    "high_complexity_function_count": 0,
+    "maximum_function_cc": 6,
+    "maximum_function_mass": 18.973665961010276
+  },
+  {
+    "commit": "313a8a25a4d298af36108e2e682767ecc9cb56d1",
+    "total_mass": 393.01764598383915,
+    "erosion_ratio": 0.0,
+    "high_complexity_function_count": 0,
+    "maximum_function_cc": 6,
+    "maximum_function_mass": 18.973665961010276
+  },
+  {
+    "commit": "7f311a01f4f3c1837dc4e954e168bfcfed792165",
+    "total_mass": 393.01764598383915,
+    "erosion_ratio": 0.0,
+    "high_complexity_function_count": 0,
+    "maximum_function_cc": 6,
+    "maximum_function_mass": 18.973665961010276
+  },
+  {
+    "commit": "2978e8b9c991349b28f62eeb31a1c1b72f3b6f26",
+    "total_mass": 393.01764598383915,
+    "erosion_ratio": 0.0,
+    "high_complexity_function_count": 0,
+    "maximum_function_cc": 6,
+    "maximum_function_mass": 18.973665961010276
+  },
+  {
     "commit": "64e913ad914ebaab312cb7c3012a9e14e384b27d",
     "total_mass": 393.01764598383915,
     "erosion_ratio": 0.0,
