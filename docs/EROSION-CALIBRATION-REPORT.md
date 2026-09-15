@@ -56,6 +56,14 @@ as high complexity. These means describe cutoff behavior, not a threshold
 decision; the sample still lacks reviewer classifications and monthly,
 release, and high-churn stratification.
 
+The monthly run is preserved in `calibration/results-monthly/`. It contains
+168 successful checkpoints, 12 for each accepted repository, with no missing
+or failed month. Across these checkpoints, the erosion-ratio median was
+`0.5418` and p95 was `0.8140`. Mean ratios by cutoff were `0.5033`, `0.3507`,
+and `0.2638` for cutoffs 5, 10, and 15. The monthly data confirms that erosion
+level varies materially across repositories and time; it does not yet provide
+commit-level reviewer classifications.
+
 The run therefore does not satisfy the plan's threshold-decision criteria.
 The rule remains warning-only.
 
