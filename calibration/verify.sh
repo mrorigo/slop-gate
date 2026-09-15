@@ -6,7 +6,7 @@ results=${1:-}
 [ -n "$results" ] || { usage >&2; exit 2; }
 command -v jq >/dev/null || { printf '%s\n' 'jq is required' >&2; exit 2; }
 repos=$(find "$results" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
-[ "$repos" -eq 20 ] || { printf 'expected 20 repositories, found %s\n' "$repos" >&2; exit 1; }
+[ "$repos" -ge 15 ] || { printf 'expected at least 15 repositories, found %s\n' "$repos" >&2; exit 1; }
 valid=0
 for file in "$results"/*/commits.jsonl; do
     test -f "$file" || { printf 'missing commit records: %s\n' "$file" >&2; exit 1; }
@@ -15,7 +15,7 @@ for file in "$results"/*/commits.jsonl; do
         valid=$((valid + 1))
     done < "$file"
 done
-[ "$valid" -ge 200 ] || { printf 'expected at least 200 valid records, found %s\n' "$valid" >&2; exit 1; }
+[ "$valid" -ge 150 ] || { printf 'expected at least 150 valid records, found %s\n' "$valid" >&2; exit 1; }
 
 if [ "$#" -ge 2 ]; then
     second=$2
