@@ -57,8 +57,9 @@ pub fn main() -> ExitCode {
         Command::History {
             ref_name,
             count,
+            complexity_cutoff,
             format,
-        } => run_history(&ref_name, count, format),
+        } => run_history(&ref_name, count, complexity_cutoff, format),
     }
 }
 
@@ -138,6 +139,9 @@ enum Command {
         /// Number of commits to include, from 1 through 100.
         #[arg(long, default_value_t = 10)]
         count: usize,
+        /// Override the structural-erosion complexity cutoff.
+        #[arg(long, value_name = "CC")]
+        complexity_cutoff: Option<u32>,
         /// Report encoding written to stdout.
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
@@ -382,7 +386,12 @@ fn run_scan(options: ScanOptions<'_>) -> ExitCode {
     }
 }
 
-fn run_history(ref_name: &str, count: usize, format: OutputFormat) -> ExitCode {
+fn run_history(
+    ref_name: &str,
+    count: usize,
+    complexity_cutoff: Option<u32>,
+    format: OutputFormat,
+) -> ExitCode {
     let result = (|| {
         if !(1..=100).contains(&count) {
             return Err(Error::invalid("history count", "must be within 1..=100"));
@@ -394,7 +403,13 @@ fn run_history(ref_name: &str, count: usize, format: OutputFormat) -> ExitCode {
         })?;
         let repository = GitRepository::open(&current_dir)?;
         let config = GateConfig::load(repository.root())?;
-        let cutoff = config.rules.structural_erosion.complexity_cutoff;
+        let cutoff = complexity_cutoff.unwrap_or(config.rules.structural_erosion.complexity_cutoff);
+        if cutoff == 0 {
+            return Err(Error::invalid(
+                "complexity cutoff",
+                "must be greater than zero",
+            ));
+        }
         repository
             .revision_history(ref_name, count)?
             .into_iter()
