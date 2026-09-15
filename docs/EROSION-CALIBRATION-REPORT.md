@@ -37,12 +37,21 @@ fixtures or generated/stress sources use syntax outside the current parser
 coverage. Those records remain in
 `calibration/results/` and are not treated as zero measurements.
 
-For the 200 valid samples, erosion delta ranged from `-0.0157402` to
-`0.0086378`; the median was `0`, and no sample exceeded the provisional `0.08`
-delta limit. This is a runner smoke test, not threshold calibration: it is a
+For the 280 valid samples, erosion delta ranged from `-0.0157402` to
+`0.0086378`; the median was `0`, p90 was `0.0001266`, p95 was `0.0005497`,
+and p99 was `0.0061209`. No sample exceeded the provisional `0.08` delta
+limit. The erosion-ratio median was `0.4111`, with p95 and maximum both about
+`0.7237`. This suggests that background erosion and erosion regression are
+different signals: high erosion can be common while adjacent-commit deltas
+remain small. This is a runner smoke test, not threshold calibration: it is a
 bounded first-parent window rather than the required monthly, release, and
 high-churn sample, and it contains no reviewer classifications or contributor
 stability judgments.
+
+Cutoff sensitivity is available for the four recovered focused repositories.
+Their mean erosion ratios were `0.6300` at cutoff 5, `0.4777` at cutoff 10,
+and `0.3911` at cutoff 15. These figures are directional only and are not
+sufficient to choose a cutoff.
 
 The run therefore does not satisfy the plan's threshold-decision criteria.
 The rule remains warning-only.
