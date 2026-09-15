@@ -1,11 +1,12 @@
 #!/bin/sh
 set -eu
 
-usage() { printf '%s\n' 'usage: calibration/run.sh --binary PATH [--output PATH] [--cutoffs LIST] [--retries N] [--keep-checkouts]'; }
+usage() { printf '%s\n' 'usage: calibration/run.sh --binary PATH [--output PATH] [--cutoffs LIST] [--retries N] [--only LIST] [--keep-checkouts]'; }
 binary=''
 output='calibration/results'
 cutoffs='10'
 retries=5
+only=''
 keep_checkouts=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -13,6 +14,7 @@ while [ "$#" -gt 0 ]; do
         --output) output=$2; shift 2 ;;
         --cutoffs) cutoffs=$2; shift 2 ;;
         --retries) retries=$2; shift 2 ;;
+        --only) only=$2; shift 2 ;;
         --keep-checkouts) keep_checkouts=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
@@ -44,6 +46,12 @@ start=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
 awk '/^name = / { name=$3; gsub(/"/, "", name) } /^url = / { url=$3; gsub(/"/, "", url); print name "\t" url }' "$manifest" |
 while IFS='	' read -r name url; do
+    if [ -n "$only" ]; then
+        case ",$only," in
+            *",$name,"*) ;;
+            *) continue ;;
+        esac
+    fi
     checkout="$tmp/$name"
     repo_output="$output/$name"
     mkdir -p "$repo_output"
