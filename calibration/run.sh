@@ -51,27 +51,25 @@ while IFS='	' read -r name url; do
     branch=$(git -C "$checkout" symbolic-ref --short HEAD)
     head=$(git -C "$checkout" rev-parse HEAD)
     printf 'repository = "%s"\nbranch = "%s"\nhead = "%s"\n' "$name" "$branch" "$head" >> "$output/manifest.lock"
-    if ! (cd "$checkout" && "$binary" history --ref "$head" --count 12 --format json > "$repo_output/history.json" 2>>"$repo_output/stderr.log") || ! jq -e 'type == "array" and length > 0' "$repo_output/history.json" >/dev/null; then
+    if ! (cd "$checkout" && "$binary" history --ref "$head" --count 100 --format json > "$repo_output/history.json" 2>>"$repo_output/stderr.log") || ! jq -e 'type == "array" and length > 0' "$repo_output/history.json" >/dev/null; then
         printf '1\n' > "$repo_output/status"
     else
         printf '0\n' > "$repo_output/status"
     fi
     : > "$repo_output/commits.jsonl"
-    git -C "$checkout" log --first-parent --format='%H%x09%P%x09%cI' -n 1200 |
-        awk 'NR % 60 == 1 { print }' |
-        while IFS='	' read -r commit parent date; do
-            test -n "$parent" || continue
-            window="$repo_output/.window.json"
-            if (cd "$checkout" && "$binary" history --ref "$commit" --count 2 --format json > "$window" 2>>"$repo_output/stderr.log") && jq -e 'type == "array" and length == 2' "$window" >/dev/null; then
-                jq -c --arg repository "$name" --arg commit "$commit" --arg parent "$parent" --arg date "$date" \
-                    '{repository: $repository, commit: $commit, parent: $parent, date: $date, status: "ok", head: .[1], base: .[0], erosion_delta: (.[1].erosion_ratio - .[0].erosion_ratio)}' \
-                    "$window" >> "$repo_output/commits.jsonl"
-            else
-                jq -nc --arg repository "$name" --arg commit "$commit" --arg parent "$parent" --arg date "$date" \
-                    '{repository: $repository, commit: $commit, parent: $parent, date: $date, status: "analysis-error"}' >> "$repo_output/commits.jsonl"
-            fi
-        done
-    rm -f "$repo_output/.window.json"
+    metadata="$repo_output/.metadata.json"
+    git -C "$checkout" log --first-parent --format='%H%x09%P%x09%cI' -n 100 |
+        awk -F '	' '{ printf "{\"commit\":\"%s\",\"parent\":\"%s\",\"date\":\"%s\"}\n", $1, $2, $3 }' |
+        jq -s 'reverse | to_entries | map(.value + {index: .key})' > "$metadata"
+    window="$repo_output/history.json"
+    if jq -e 'type == "array" and length >= 20' "$window" >/dev/null; then
+        jq -n -c --arg repository "$name" --slurpfile summaries "$window" --slurpfile metadata "$metadata" \
+            '$metadata[0] as $m | $summaries[0] as $s | [$m[] | select(.index % 5 == 0 and .parent != "") | . as $entry | ($s[.index] // null) as $head | ($s[.index - 1] // null) as $base | {repository: $repository, commit: .commit, parent: .parent, date: .date, status: (if $head == null then "analysis-error" else "ok" end), head: $head, base: $base, erosion_delta: (if $head != null and $base != null then $head.erosion_ratio - $base.erosion_ratio else null end)}]' \
+            | jq -c '.[]' >> "$repo_output/commits.jsonl"
+    else
+        printf '%s\n' '{"status":"analysis-error","reason":"fewer than 20 valid history summaries"}' >> "$repo_output/commits.jsonl"
+    fi
+    rm -f "$metadata"
 done
 failed=$(find "$output" -type f -name status -exec grep -l '^1$' {} + | wc -l | tr -d ' ')
 [ "$failed" -eq 0 ]
