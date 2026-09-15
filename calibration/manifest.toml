@@ -1,0 +1,103 @@
+version = 1
+window_months = 12
+commit_samples = 20
+
+[[repositories]]
+name = "tokio"
+url = "https://github.com/tokio-rs/tokio.git"
+category = "workspace"
+
+[[repositories]]
+name = "serde"
+url = "https://github.com/serde-rs/serde.git"
+category = "library"
+
+[[repositories]]
+name = "clap"
+url = "https://github.com/clap-rs/clap.git"
+category = "library"
+
+[[repositories]]
+name = "ripgrep"
+url = "https://github.com/BurntSushi/ripgrep.git"
+category = "application"
+
+[[repositories]]
+name = "rayon"
+url = "https://github.com/rayon-rs/rayon.git"
+category = "library"
+
+[[repositories]]
+name = "hyper"
+url = "https://github.com/hyperium/hyper.git"
+category = "library"
+
+[[repositories]]
+name = "axum"
+url = "https://github.com/tokio-rs/axum.git"
+category = "library"
+
+[[repositories]]
+name = "reqwest"
+url = "https://github.com/seanmonstar/reqwest.git"
+category = "library"
+
+[[repositories]]
+name = "rustls"
+url = "https://github.com/rustls/rustls.git"
+category = "library"
+
+[[repositories]]
+name = "regex"
+url = "https://github.com/rust-lang/regex.git"
+category = "library"
+
+[[repositories]]
+name = "syn"
+url = "https://github.com/dtolnay/syn.git"
+category = "library"
+
+[[repositories]]
+name = "quote"
+url = "https://github.com/dtolnay/quote.git"
+category = "library"
+
+[[repositories]]
+name = "anyhow"
+url = "https://github.com/dtolnay/anyhow.git"
+category = "library"
+
+[[repositories]]
+name = "thiserror"
+url = "https://github.com/dtolnay/thiserror.git"
+category = "library"
+
+[[repositories]]
+name = "tracing"
+url = "https://github.com/tokio-rs/tracing.git"
+category = "library"
+
+[[repositories]]
+name = "cargo"
+url = "https://github.com/rust-lang/cargo.git"
+category = "application"
+
+[[repositories]]
+name = "rust-analyzer"
+url = "https://github.com/rust-lang/rust-analyzer.git"
+category = "application"
+
+[[repositories]]
+name = "bevy"
+url = "https://github.com/bevyengine/bevy.git"
+category = "workspace"
+
+[[repositories]]
+name = "diesel"
+url = "https://github.com/diesel-rs/diesel.git"
+category = "workspace"
+
+[[repositories]]
+name = "sqlx"
+url = "https://github.com/launchbadge/sqlx.git"
+category = "workspace"

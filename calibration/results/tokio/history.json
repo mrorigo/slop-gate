@@ -1,0 +1,98 @@
+[
+  {
+    "commit": "67192437dcc00edd67488acb6dc0a3b1910c679e",
+    "total_mass": 46436.452703320356,
+    "erosion_ratio": 0.16015841846820555,
+    "high_complexity_function_count": 59,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062
+  },
+  {
+    "commit": "53542467a3b0fdfbcdcaff236e31f7ab2e9503f0",
+    "total_mass": 46452.85064656779,
+    "erosion_ratio": 0.16010188224663707,
+    "high_complexity_function_count": 59,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062
+  },
+  {
+    "commit": "ce2399a718b51cb69d5ff39fb6a7d9c850ef100b",
+    "total_mass": 46487.29852119348,
+    "erosion_ratio": 0.160646701037768,
+    "high_complexity_function_count": 59,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062
+  },
+  {
+    "commit": "0469d47fcc891a7e1e7339c9bcb0fdd27eab47df",
+    "total_mass": 46481.92737591812,
+    "erosion_ratio": 0.1606652643120983,
+    "high_complexity_function_count": 59,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062
+  },
+  {
+    "commit": "2025ddd83c1466b81f25d0be50f5334b620c51c3",
+    "total_mass": 46491.170427410645,
+    "erosion_ratio": 0.16063332196051963,
+    "high_complexity_function_count": 59,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062
+  },
+  {
+    "commit": "024163997bb719231a956f4b7a89475100756faa",
+    "total_mass": 46532.71947539391,
+    "erosion_ratio": 0.1604898925268417,
+    "high_complexity_function_count": 59,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062
+  },
+  {
+    "commit": "7f6bb9afcac3a59debfffe65c2591588fa48dfe5",
+    "total_mass": 46538.047990175386,
+    "erosion_ratio": 0.1604715167504278,
+    "high_complexity_function_count": 59,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062
+  },
+  {
+    "commit": "6276684c288d8e513410219fa2129c69df41af18",
+    "total_mass": 46550.717294916154,
+    "erosion_ratio": 0.16042784261034865,
+    "high_complexity_function_count": 59,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062
+  },
+  {
+    "commit": "6c2041ca798d3b3d4d426c58160240100186e3ef",
+    "total_mass": 46554.44934572372,
+    "erosion_ratio": 0.16041498186625255,
+    "high_complexity_function_count": 59,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062
+  },
+  {
+    "commit": "da21efb91d5bf5414786815520728fdac50ae328",
+    "total_mass": 46556.41746450879,
+    "erosion_ratio": 0.160408200508141,
+    "high_complexity_function_count": 59,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062
+  },
+  {
+    "commit": "8146318256a83c892fcc7f43a41f66389a892669",
+    "total_mass": 46556.41746450879,
+    "erosion_ratio": 0.160408200508141,
+    "high_complexity_function_count": 59,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062
+  },
+  {
+    "commit": "eb9cdf2ff012ec22d4efd74cf46d04222264cd8e",
+    "total_mass": 46566.7805456095,
+    "erosion_ratio": 0.16037250288911714,
+    "high_complexity_function_count": 59,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062
+  }
+]
