@@ -1,0 +1,78 @@
+{
+  "samples": 210,
+  "valid_samples": 200,
+  "invalid_samples": 10,
+  "repositories": 11,
+  "valid_repositories": 10,
+  "delta": {
+    "minimum": -0.015740219338037265,
+    "median": 0,
+    "p90": 0.00012655650755311054,
+    "p95": 0.0008148237393461599,
+    "p99": 0.006406098702753327,
+    "maximum": 0.00863777145047323,
+    "at_0_08": 0
+  },
+  "by_repository": [
+    {
+      "repository": "axum",
+      "samples": 20,
+      "median_delta": 0,
+      "p95_delta": 9.304178697211452E-7
+    },
+    {
+      "repository": "quote",
+      "samples": 20,
+      "median_delta": 0,
+      "p95_delta": 0
+    },
+    {
+      "repository": "rayon",
+      "samples": 20,
+      "median_delta": 0,
+      "p95_delta": 0.000123549139628365
+    },
+    {
+      "repository": "regex",
+      "samples": 20,
+      "median_delta": 0,
+      "p95_delta": 0.00015108708051281283
+    },
+    {
+      "repository": "reqwest",
+      "samples": 20,
+      "median_delta": 0,
+      "p95_delta": 0.0013305440251169531
+    },
+    {
+      "repository": "ripgrep",
+      "samples": 20,
+      "median_delta": 0,
+      "p95_delta": 0.0056313341465888955
+    },
+    {
+      "repository": "serde",
+      "samples": 20,
+      "median_delta": 0,
+      "p95_delta": 0.008067289576105752
+    },
+    {
+      "repository": "thiserror",
+      "samples": 20,
+      "median_delta": 0,
+      "p95_delta": 0.00012655650755311054
+    },
+    {
+      "repository": "tokio",
+      "samples": 20,
+      "median_delta": -0.00001837577641389254,
+      "p95_delta": 0.000544818791130941
+    },
+    {
+      "repository": "tracing",
+      "samples": 20,
+      "median_delta": 0,
+      "p95_delta": 0.00020477899460213944
+    }
+  ]
+}
