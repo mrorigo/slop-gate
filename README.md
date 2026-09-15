@@ -25,6 +25,7 @@ pull request ── slop-gate check ────────┴──► human, 
 | `lint-suppression-growth` | Did this change weaken a compiler or Clippy diagnostic? | Added or broadened `allow`/`expect` attributes. |
 | `unsafe-surface-growth` | Did this change add unsafe surface? | Added unsafe blocks, declarations, implementations, or extern blocks. |
 | `dependency-surface-growth` | Did this change expand production dependency surface? | New direct edges or added features/default features. |
+| `structural-erosion` | Is complexity becoming concentrated in high-complexity functions? | High-complexity function mass divided by total function mass. |
 
 Cyclomatic complexity (CC) counts independent control-flow paths. Source lines
 of code (SLOC) exclude blank and comment-only lines. Identifiers and literals
@@ -127,6 +128,7 @@ edits. Git-ignored files remain excluded unless `--no-ignore` is supplied.
 slop-gate scan --format human
 slop-gate scan --working-tree --path crates/core --top 20
 slop-gate scan --ref HEAD --format sarif > slop-gate.sarif
+slop-gate history --ref HEAD --count 20 --format json
 ```
 
 Use `--threshold`, `--min-sloc`, and `--top` to tune exploratory output.
@@ -161,6 +163,13 @@ severity = "warn"
 
 [rules.dependency_surface]
 severity = "warn"
+
+[rules.structural_erosion]
+severity = "warn"
+erosion_limit = 0.50
+delta_limit = 0.08
+complexity_cutoff = 10
+top_contributors = 3
 
 [[suppressions]]
 rule = "near-clone"
