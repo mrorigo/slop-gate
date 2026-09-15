@@ -129,6 +129,7 @@ slop-gate scan --format human
 slop-gate scan --working-tree --path crates/core --top 20
 slop-gate scan --ref HEAD --format sarif > slop-gate.sarif
 slop-gate history --ref HEAD --count 20 --format json
+slop-gate history --ref HEAD --count 12 --complexity-cutoffs 5,10,15 --format json
 ```
 
 Use `--threshold`, `--min-sloc`, and `--top` to tune exploratory output.

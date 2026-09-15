@@ -7,7 +7,7 @@ repository.
 Run from the repository root:
 
 ```sh
-./calibration/run.sh --binary target/release/slop-gate
+./calibration/run.sh --binary target/release/slop-gate --cutoffs 5,10,15
 ```
 
 The runner clones each repository into a temporary directory, resolves its
@@ -17,3 +17,6 @@ default branch, samples first-parent history, and writes results under
 
 The run requires `git`, `jq`, and a built Slop Gate binary. Network access is
 needed only for cloning.
+
+Each history document includes `erosion_by_cutoff` values. The first cutoff is
+also used for the commit-level `erosion_delta` records.
