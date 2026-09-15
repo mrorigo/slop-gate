@@ -1,0 +1,262 @@
+[
+  {
+    "commit": "6ea78fb8e1527e1ca4f8c032e49d409fc984deb3",
+    "total_mass": 37673.92494669294,
+    "erosion_ratio": 0.5459153311495473,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5459153311495473,
+      "10": 0.3968880409014856,
+      "15": 0.3313879627770108
+    }
+  },
+  {
+    "commit": "af9deff768b806b5256a82c6865e6fa4f235e897",
+    "total_mass": 37674.569372068356,
+    "erosion_ratio": 0.5459230982903023,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5459230982903023,
+      "10": 0.39688125211188513,
+      "15": 0.33138229436949135
+    }
+  },
+  {
+    "commit": "6e2c4ac052a07ad8f7670bf3fa7ca99c0504de64",
+    "total_mass": 37674.569372068356,
+    "erosion_ratio": 0.5459230982903023,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5459230982903023,
+      "10": 0.39688125211188513,
+      "15": 0.33138229436949135
+    }
+  },
+  {
+    "commit": "852ead088547d5444ed22299d3c7213fa9fdffea",
+    "total_mass": 37674.569372068356,
+    "erosion_ratio": 0.5459230982903023,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5459230982903023,
+      "10": 0.39688125211188513,
+      "15": 0.33138229436949135
+    }
+  },
+  {
+    "commit": "34b761abccb21ec7c695f19e6d156b4cdfcea86e",
+    "total_mass": 37674.569372068356,
+    "erosion_ratio": 0.5459230982903023,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5459230982903023,
+      "10": 0.39688125211188513,
+      "15": 0.33138229436949135
+    }
+  },
+  {
+    "commit": "ad772d4c9bd9d545250ff59c2424fc933eb167cd",
+    "total_mass": 37674.569372068356,
+    "erosion_ratio": 0.5459230982903023,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5459230982903023,
+      "10": 0.39688125211188513,
+      "15": 0.33138229436949135
+    }
+  },
+  {
+    "commit": "9be8fa6bc5e5fcdb164067d0f67cd18a43a3833a",
+    "total_mass": 37674.569372068356,
+    "erosion_ratio": 0.5459230982903023,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5459230982903023,
+      "10": 0.39688125211188513,
+      "15": 0.33138229436949135
+    }
+  },
+  {
+    "commit": "c86168b392c9be2a9a486b52c892d14a705de620",
+    "total_mass": 37674.569372068356,
+    "erosion_ratio": 0.5459230982903023,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5459230982903023,
+      "10": 0.39688125211188513,
+      "15": 0.33138229436949135
+    }
+  },
+  {
+    "commit": "176833e605cfc5581d2222634ebe5b08161405d3",
+    "total_mass": 37674.569372068356,
+    "erosion_ratio": 0.5459230982903023,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5459230982903023,
+      "10": 0.39688125211188513,
+      "15": 0.33138229436949135
+    }
+  },
+  {
+    "commit": "7c45de278627c58460b655371e8e2bc44077d917",
+    "total_mass": 37732.694228274704,
+    "erosion_ratio": 0.5464433214169875,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5464433214169875,
+      "10": 0.39761007099167206,
+      "15": 0.33221201029833103
+    }
+  },
+  {
+    "commit": "d9a039724f383224d27696ec1a28c74ed3ef7983",
+    "total_mass": 37760.05544921145,
+    "erosion_ratio": 0.546605531478864,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.546605531478864,
+      "10": 0.3973539783459788,
+      "15": 0.33200330558059976
+    }
+  },
+  {
+    "commit": "2f7b04db01dd37010605c16c34abc7d468c75968",
+    "total_mass": 37749.15912719611,
+    "erosion_ratio": 0.5467633095598616,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5467633095598616,
+      "10": 0.39746867485849047,
+      "15": 0.33209913857427187
+    }
+  },
+  {
+    "commit": "fbfef11cd9082f64f98f92c6afac8e91700ed8e5",
+    "total_mass": 37749.15912719611,
+    "erosion_ratio": 0.5467633095598616,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5467633095598616,
+      "10": 0.39746867485849047,
+      "15": 0.33209913857427187
+    }
+  },
+  {
+    "commit": "75fe1d56da5a8e005522dd7dd1f83ed664b81960",
+    "total_mass": 37749.15912719611,
+    "erosion_ratio": 0.5467633095598616,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5467633095598616,
+      "10": 0.39746867485849047,
+      "15": 0.33209913857427187
+    }
+  },
+  {
+    "commit": "98456aea708a7e3c6151e00ca2d4428e7a58257a",
+    "total_mass": 37819.630664623306,
+    "erosion_ratio": 0.5457444933959718,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5457444933959718,
+      "10": 0.3967280481494457,
+      "15": 0.33148031875868156
+    }
+  },
+  {
+    "commit": "db6f28aa7409fd0043f625b238b901c3b8fc449f",
+    "total_mass": 37826.33886855581,
+    "erosion_ratio": 0.54564770989891,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.54564770989891,
+      "10": 0.39665769154787295,
+      "15": 0.33142153332915397
+    }
+  },
+  {
+    "commit": "de4dae4bc2cc8553c85760f79f52fd5d97ddecd7",
+    "total_mass": 37833.048223569844,
+    "erosion_ratio": 0.5457282852413387,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5457282852413387,
+      "10": 0.39676468894650907,
+      "15": 0.33136275866438836
+    }
+  },
+  {
+    "commit": "856bdf37d5d9cdce9bdbf2bda46f7fdf0bed945f",
+    "total_mass": 37838.5047765335,
+    "erosion_ratio": 0.5458045856829628,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5458045856829628,
+      "10": 0.39680299823648146,
+      "15": 0.33141049932852884
+    }
+  },
+  {
+    "commit": "53228b6934b3215aa735fd1125ac6a346d9ddc4a",
+    "total_mass": 37838.5047765335,
+    "erosion_ratio": 0.5458045856829628,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5458045856829628,
+      "10": 0.39680299823648146,
+      "15": 0.33141049932852884
+    }
+  },
+  {
+    "commit": "c3d0e3779de5efa98a5d96651d18affcba702c9d",
+    "total_mass": 37838.5047765335,
+    "erosion_ratio": 0.5458045856829628,
+    "high_complexity_function_count": 197,
+    "maximum_function_cc": 97,
+    "maximum_function_mass": 2131.7943146560833,
+    "erosion_by_cutoff": {
+      "5": 0.5458045856829628,
+      "10": 0.39680299823648146,
+      "15": 0.33141049932852884
+    }
+  }
+]

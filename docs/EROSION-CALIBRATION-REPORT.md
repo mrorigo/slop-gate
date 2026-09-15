@@ -30,10 +30,11 @@ false-positive rate.
 ## P9.4 panel run
 
 On 2026-09-15, the calibration runner attempted the 20 repositories listed in
-`calibration/manifest.toml`. Ten repositories produced 20 valid commit records
-each, for 200 valid samples. The remaining repositories produced incomplete
-records because historical revisions contained syntax-invalid Rust or the
-checkout/analysis could not complete. Those records remain in
+`calibration/manifest.toml`. After bounded window retries and parser fixes, 14
+repositories produced 20 valid commit records each, for 280 valid samples.
+Five repositories still produced incomplete records because their tracked test
+fixtures or generated/stress sources use syntax outside the current parser
+coverage. Those records remain in
 `calibration/results/` and are not treated as zero measurements.
 
 For the 200 valid samples, erosion delta ranged from `-0.0157402` to

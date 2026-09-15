@@ -1,15 +1,15 @@
 {
-  "samples": 210,
-  "valid_samples": 200,
-  "invalid_samples": 10,
-  "repositories": 11,
-  "valid_repositories": 10,
+  "samples": 286,
+  "valid_samples": 280,
+  "invalid_samples": 6,
+  "repositories": 15,
+  "valid_repositories": 14,
   "delta": {
     "minimum": -0.015740219338037265,
     "median": 0,
     "p90": 0.00012655650755311054,
-    "p95": 0.0008148237393461599,
-    "p99": 0.006406098702753327,
+    "p95": 0.0005496813249110666,
+    "p99": 0.006120879761480513,
     "maximum": 0.00863777145047323,
     "at_0_08": 0
   },
@@ -19,6 +19,12 @@
       "samples": 20,
       "median_delta": 0,
       "p95_delta": 9.304178697211452E-7
+    },
+    {
+      "repository": "clap",
+      "samples": 20,
+      "median_delta": 0,
+      "p95_delta": 0.000032859053327616294
     },
     {
       "repository": "quote",
@@ -51,10 +57,28 @@
       "p95_delta": 0.0056313341465888955
     },
     {
+      "repository": "rustls",
+      "samples": 20,
+      "median_delta": 0,
+      "p95_delta": 0.0001622100618765554
+    },
+    {
       "repository": "serde",
       "samples": 20,
       "median_delta": 0,
       "p95_delta": 0.008067289576105752
+    },
+    {
+      "repository": "sqlx",
+      "samples": 20,
+      "median_delta": 0,
+      "p95_delta": 0.0005496813249110666
+    },
+    {
+      "repository": "syn",
+      "samples": 20,
+      "median_delta": 0,
+      "p95_delta": 0
     },
     {
       "repository": "thiserror",
