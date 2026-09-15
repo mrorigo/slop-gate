@@ -5,12 +5,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-use super::AnalyzedFile;
+use super::{AnalyzedFile, RepositorySummary};
 
 /// Current on-disk schema version for [`IndexArtifact`].
-pub const ARTIFACT_VERSION: u32 = 2;
+pub const ARTIFACT_VERSION: u32 = 3;
 
-const ANALYZER_RULESET: &str = "slop-gate-analysis-v2|rust-function-item|rust-cc-v1|normalized-token-v1|shingle-v1|normalized-ast-v1|ast-shingle-v1";
+const ANALYZER_RULESET: &str = "slop-gate-analysis-v2|rust-function-item|rust-cc-v1|normalized-token-v1|shingle-v1|normalized-ast-v1|ast-shingle-v1|repository-summary-v1";
 
 /// A portable baseline index for one exact Git revision.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -25,6 +25,8 @@ pub struct IndexArtifact {
     pub repository_commit: String,
     /// Per-file analysis facts, sorted by repository-relative path.
     pub files: Vec<AnalyzedFile>,
+    /// Aggregate complexity facts for the analyzed revision.
+    pub summary: RepositorySummary,
 }
 
 impl IndexArtifact {
@@ -37,7 +39,7 @@ impl IndexArtifact {
     ///
     /// # Returns
     ///
-    /// Returns a schema-v2 artifact with files in stable path order.
+    /// Returns a schema-v3 artifact with files in stable path order.
     ///
     /// # Errors
     ///
@@ -67,12 +69,14 @@ impl IndexArtifact {
         expected_fingerprint: String,
     ) -> Result<Self> {
         files.sort_by(|left, right| left.path.cmp(&right.path));
+        let summary = RepositorySummary::from_files(&files);
         let artifact = Self {
             artifact_version: ARTIFACT_VERSION,
             tool_version: env!("CARGO_PKG_VERSION").to_string(),
             analyzer_fingerprint: expected_fingerprint.clone(),
             repository_commit,
             files,
+            summary,
         };
         artifact.validate_with_fingerprint(&expected_fingerprint)?;
         Ok(artifact)
@@ -200,6 +204,13 @@ impl IndexArtifact {
                 ));
             }
         }
+        let expected_summary = RepositorySummary::from_files(&self.files);
+        if self.summary != expected_summary {
+            return Err(Error::invalid(
+                "artifact summary",
+                "does not match the artifact function facts",
+            ));
+        }
         Ok(())
     }
 }
@@ -246,6 +257,7 @@ fn is_relative_path(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::IndexArtifact;
+    use crate::analysis::RepositorySummary;
     use crate::analysis::analyze_rust_file;
 
     #[test]
@@ -271,6 +283,31 @@ mod tests {
         let mut document = serde_json::to_value(artifact).unwrap();
         document["artifact_version"] = serde_json::json!(1);
         let encoded = serde_json::to_vec(&document).unwrap();
+        assert!(IndexArtifact::from_json(&encoded).is_err());
+    }
+
+    #[test]
+    fn artifact_contains_deterministic_repository_summary() {
+        let file = analyze_rust_file("src/lib.rs", "fn simple() {}\n").unwrap();
+        let artifact = IndexArtifact::new("a".repeat(40), vec![file]).unwrap();
+
+        assert_eq!(
+            artifact.summary,
+            RepositorySummary::from_files(&artifact.files)
+        );
+        assert_eq!(artifact.to_json().unwrap(), artifact.to_json().unwrap());
+        assert!(artifact.summary.total_mass > 0.0);
+        assert_eq!(artifact.summary.high_complexity_function_count, 0);
+    }
+
+    #[test]
+    fn artifact_rejects_inconsistent_repository_summary() {
+        let file = analyze_rust_file("src/lib.rs", "fn answer() {}\n").unwrap();
+        let artifact = IndexArtifact::new("a".repeat(40), vec![file]).unwrap();
+        let mut document = serde_json::to_value(artifact).unwrap();
+        document["summary"]["total_mass"] = serde_json::json!(999.0);
+        let encoded = serde_json::to_vec(&document).unwrap();
+
         assert!(IndexArtifact::from_json(&encoded).is_err());
     }
 }
