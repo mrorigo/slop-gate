@@ -1,0 +1,262 @@
+[
+  {
+    "commit": "050cd3a9ac3878b0a70333b8c8229b510dd64d5e",
+    "total_mass": 46059.11166798713,
+    "erosion_ratio": 0.361728287924882,
+    "high_complexity_function_count": 305,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.361728287924882,
+      "10": 0.15881138542512113,
+      "15": 0.0774025293773639
+    }
+  },
+  {
+    "commit": "0e25691ea096b99c4e06b365c5e16ee1c5863789",
+    "total_mass": 46059.76829778429,
+    "erosion_ratio": 0.36172313111274185,
+    "high_complexity_function_count": 305,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.36172313111274185,
+      "10": 0.15880912140401,
+      "15": 0.07740142592398054
+    }
+  },
+  {
+    "commit": "4fcaed994cef343d9a60fefab1aaf826259f6c1f",
+    "total_mass": 46146.38652889294,
+    "erosion_ratio": 0.3614462431830622,
+    "high_complexity_function_count": 305,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.3614462431830622,
+      "10": 0.1589131095062409,
+      "15": 0.07758870860981944
+    }
+  },
+  {
+    "commit": "af8544af39f1bb0ee1a0244b3f4c5ed677980f95",
+    "total_mass": 46321.70290967473,
+    "erosion_ratio": 0.3623217636994643,
+    "high_complexity_function_count": 306,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.3623217636994643,
+      "10": 0.1605551686806421,
+      "15": 0.07729505421612128
+    }
+  },
+  {
+    "commit": "bd5604a2ca55e804a41928a38baeb6a10377f0b7",
+    "total_mass": 46369.66545867433,
+    "erosion_ratio": 0.3625399576140547,
+    "high_complexity_function_count": 307,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.3625399576140547,
+      "10": 0.16038909814576088,
+      "15": 0.07721510393421614
+    }
+  },
+  {
+    "commit": "7bb6f0734922cffa7e49049dfc4c10d84737db41",
+    "total_mass": 46412.83145137138,
+    "erosion_ratio": 0.362202779366717,
+    "high_complexity_function_count": 307,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.362202779366717,
+      "10": 0.16023992916764113,
+      "15": 0.07714329046134026
+    }
+  },
+  {
+    "commit": "74665295902472afe6834ddad7467a2fce33b3fc",
+    "total_mass": 46433.94868615043,
+    "erosion_ratio": 0.36203805675866985,
+    "high_complexity_function_count": 307,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.36203805675866985,
+      "10": 0.16016705524024627,
+      "15": 0.07710820722973075
+    }
+  },
+  {
+    "commit": "9e56e03df397aa8fb5ad7a3661e76a6f2a088ed9",
+    "total_mass": 46433.94868615043,
+    "erosion_ratio": 0.36203805675866985,
+    "high_complexity_function_count": 307,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.36203805675866985,
+      "10": 0.16016705524024627,
+      "15": 0.07710820722973075
+    }
+  },
+  {
+    "commit": "67192437dcc00edd67488acb6dc0a3b1910c679e",
+    "total_mass": 46436.452703320356,
+    "erosion_ratio": 0.36201853439084203,
+    "high_complexity_function_count": 307,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.36201853439084203,
+      "10": 0.16015841846820555,
+      "15": 0.07710404928347074
+    }
+  },
+  {
+    "commit": "53542467a3b0fdfbcdcaff236e31f7ab2e9503f0",
+    "total_mass": 46452.85064656779,
+    "erosion_ratio": 0.36217234538362647,
+    "high_complexity_function_count": 307,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.36217234538362647,
+      "10": 0.16010188224663707,
+      "15": 0.07707683140971919
+    }
+  },
+  {
+    "commit": "ce2399a718b51cb69d5ff39fb6a7d9c850ef100b",
+    "total_mass": 46487.29852119348,
+    "erosion_ratio": 0.36256742654316493,
+    "high_complexity_function_count": 307,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.36256742654316493,
+      "10": 0.160646701037768,
+      "15": 0.0770197161737427
+    }
+  },
+  {
+    "commit": "0469d47fcc891a7e1e7339c9bcb0fdd27eab47df",
+    "total_mass": 46481.92737591812,
+    "erosion_ratio": 0.36260932244615374,
+    "high_complexity_function_count": 307,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.36260932244615374,
+      "10": 0.1606652643120983,
+      "15": 0.07702861606468936
+    }
+  },
+  {
+    "commit": "2025ddd83c1466b81f25d0be50f5334b620c51c3",
+    "total_mass": 46491.170427410645,
+    "erosion_ratio": 0.3626615330748825,
+    "high_complexity_function_count": 307,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.3626615330748825,
+      "10": 0.16063332196051963,
+      "15": 0.07701330177042363
+    }
+  },
+  {
+    "commit": "024163997bb719231a956f4b7a89475100756faa",
+    "total_mass": 46532.71947539391,
+    "erosion_ratio": 0.3638700743095146,
+    "high_complexity_function_count": 309,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.3638700743095146,
+      "10": 0.1604898925268417,
+      "15": 0.07694453662179952
+    }
+  },
+  {
+    "commit": "7f6bb9afcac3a59debfffe65c2591588fa48dfe5",
+    "total_mass": 46538.047990175386,
+    "erosion_ratio": 0.36382841190309173,
+    "high_complexity_function_count": 309,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.36382841190309173,
+      "10": 0.1604715167504278,
+      "15": 0.07693572662399237
+    }
+  },
+  {
+    "commit": "6276684c288d8e513410219fa2129c69df41af18",
+    "total_mass": 46550.717294916154,
+    "erosion_ratio": 0.3637293918816698,
+    "high_complexity_function_count": 309,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.3637293918816698,
+      "10": 0.16042784261034865,
+      "15": 0.07691478769495554
+    }
+  },
+  {
+    "commit": "6c2041ca798d3b3d4d426c58160240100186e3ef",
+    "total_mass": 46554.44934572372,
+    "erosion_ratio": 0.3637002334104649,
+    "high_complexity_function_count": 309,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.3637002334104649,
+      "10": 0.16041498186625255,
+      "15": 0.07690862179890125
+    }
+  },
+  {
+    "commit": "da21efb91d5bf5414786815520728fdac50ae328",
+    "total_mass": 46556.41746450879,
+    "erosion_ratio": 0.3636848584030976,
+    "high_complexity_function_count": 309,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.3636848584030976,
+      "10": 0.160408200508141,
+      "15": 0.07690537057572859
+    }
+  },
+  {
+    "commit": "8146318256a83c892fcc7f43a41f66389a892669",
+    "total_mass": 46556.41746450879,
+    "erosion_ratio": 0.3636848584030976,
+    "high_complexity_function_count": 309,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.3636848584030976,
+      "10": 0.160408200508141,
+      "15": 0.07690537057572859
+    }
+  },
+  {
+    "commit": "eb9cdf2ff012ec22d4efd74cf46d04222264cd8e",
+    "total_mass": 46566.7805456095,
+    "erosion_ratio": 0.36360392311750195,
+    "high_complexity_function_count": 309,
+    "maximum_function_cc": 40,
+    "maximum_function_mass": 622.0868106623062,
+    "erosion_by_cutoff": {
+      "5": 0.36360392311750195,
+      "10": 0.16037250288911714,
+      "15": 0.0768882558732944
+    }
+  }
+]

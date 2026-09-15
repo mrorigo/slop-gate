@@ -48,10 +48,13 @@ bounded first-parent window rather than the required monthly, release, and
 high-churn sample, and it contains no reviewer classifications or contributor
 stability judgments.
 
-Cutoff sensitivity is available for the four recovered focused repositories.
-Their mean erosion ratios were `0.6300` at cutoff 5, `0.4777` at cutoff 10,
-and `0.3911` at cutoff 15. These figures are directional only and are not
-sufficient to choose a cutoff.
+Cutoff sensitivity is available for all 14 accepted repositories and 280
+revisions in `calibration/results-sensitivity/`. Mean erosion ratios were
+`0.5038` at cutoff 5, `0.3507` at cutoff 10, and `0.2639` at cutoff 15. The
+monotonic decrease is expected because higher cutoffs classify fewer functions
+as high complexity. These means describe cutoff behavior, not a threshold
+decision; the sample still lacks reviewer classifications and monthly,
+release, and high-churn stratification.
 
 The run therefore does not satisfy the plan's threshold-decision criteria.
 The rule remains warning-only.

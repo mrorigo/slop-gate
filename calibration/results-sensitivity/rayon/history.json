@@ -1,0 +1,262 @@
+[
+  {
+    "commit": "b4c58afc5a757b093ab22cf8e96e2dfa26696c6d",
+    "total_mass": 10733.026854896778,
+    "erosion_ratio": 0.22645215854930903,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22645215854930903,
+      "10": 0.09618208758016701,
+      "15": 0.04278375203779638
+    }
+  },
+  {
+    "commit": "72345cbfdc6afcddff5ee4667e1d0dd2d54dcdbb",
+    "total_mass": 10733.026854896778,
+    "erosion_ratio": 0.22645215854930903,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22645215854930903,
+      "10": 0.09618208758016701,
+      "15": 0.04278375203779638
+    }
+  },
+  {
+    "commit": "7af20d7692d5decbcb4adcaa079cd607e3e50814",
+    "total_mass": 10733.026854896778,
+    "erosion_ratio": 0.22645215854930903,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22645215854930903,
+      "10": 0.09618208758016701,
+      "15": 0.04278375203779638
+    }
+  },
+  {
+    "commit": "dfe0ef0ab51c71cf06c6233053cfb75b7308762b",
+    "total_mass": 10733.026854896778,
+    "erosion_ratio": 0.22645215854930903,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22645215854930903,
+      "10": 0.09618208758016701,
+      "15": 0.04278375203779638
+    }
+  },
+  {
+    "commit": "5142c8d0e2c64e4c86be0398807ae8ee6e796f06",
+    "total_mass": 10733.026854896778,
+    "erosion_ratio": 0.22645215854930903,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22645215854930903,
+      "10": 0.09618208758016701,
+      "15": 0.04278375203779638
+    }
+  },
+  {
+    "commit": "5b4eb339c06943cbb71d8368e78343c049e6d71c",
+    "total_mass": 10733.026854896778,
+    "erosion_ratio": 0.22645215854930903,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22645215854930903,
+      "10": 0.09618208758016701,
+      "15": 0.04278375203779638
+    }
+  },
+  {
+    "commit": "a6b82fca094b0c0975e6323131a50f53703bb367",
+    "total_mass": 10733.026854896778,
+    "erosion_ratio": 0.22645215854930903,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22645215854930903,
+      "10": 0.09618208758016701,
+      "15": 0.04278375203779638
+    }
+  },
+  {
+    "commit": "56bbf0623b9ad3cd6e91e169c5a8a1c10b319b4b",
+    "total_mass": 10739.026854896776,
+    "erosion_ratio": 0.2263256374995292,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.2263256374995292,
+      "10": 0.096128349701188,
+      "15": 0.04275984833444456
+    }
+  },
+  {
+    "commit": "c9ae0472072c60cc9d911c16fd42cd1eb84a5d0a",
+    "total_mass": 10759.174666462013,
+    "erosion_ratio": 0.22590181630152067,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22590181630152067,
+      "10": 0.09594833813562675,
+      "15": 0.042679775522773786
+    }
+  },
+  {
+    "commit": "c9ced185ae3508246a9eb70c8407a1199bb1b77f",
+    "total_mass": 10759.174666462013,
+    "erosion_ratio": 0.22590181630152067,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22590181630152067,
+      "10": 0.09594833813562675,
+      "15": 0.042679775522773786
+    }
+  },
+  {
+    "commit": "3b305a092a081323ebc8b813b0c09d7803703428",
+    "total_mass": 10706.15268392089,
+    "erosion_ratio": 0.22710719519598965,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22710719519598965,
+      "10": 0.09642352014168179,
+      "15": 0.04289114615977453
+    }
+  },
+  {
+    "commit": "63349e437877006003d0c4a12d7125af5fae1ec9",
+    "total_mass": 10706.15268392089,
+    "erosion_ratio": 0.22710719519598965,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22710719519598965,
+      "10": 0.09642352014168179,
+      "15": 0.04289114615977453
+    }
+  },
+  {
+    "commit": "e3e017d87eb5f58f056f04c516b43e077fa77c7d",
+    "total_mass": 10706.15268392089,
+    "erosion_ratio": 0.22710719519598965,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22710719519598965,
+      "10": 0.09642352014168179,
+      "15": 0.04289114615977453
+    }
+  },
+  {
+    "commit": "101822b97c80a8b2b3664e1a0dd0af913d4bedf9",
+    "total_mass": 10706.15268392089,
+    "erosion_ratio": 0.22710719519598965,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22710719519598965,
+      "10": 0.09642352014168179,
+      "15": 0.04289114615977453
+    }
+  },
+  {
+    "commit": "ef2093754d2ce657e1942db9820cb742c47e6bbd",
+    "total_mass": 10706.15268392089,
+    "erosion_ratio": 0.22710719519598965,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22710719519598965,
+      "10": 0.09642352014168179,
+      "15": 0.04289114615977453
+    }
+  },
+  {
+    "commit": "c4dac9f82ee03f61e855075b668229a9e4d759ad",
+    "total_mass": 10692.452258183737,
+    "erosion_ratio": 0.22739819160981736,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22739819160981736,
+      "10": 0.09654706928131015,
+      "15": 0.042946103334102204
+    }
+  },
+  {
+    "commit": "9254f190aa7ee7521d528e839be3cd0921a04fd8",
+    "total_mass": 10693.681166829545,
+    "erosion_ratio": 0.22744093035735402,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22744093035735402,
+      "10": 0.09653597417511461,
+      "15": 0.04294116800482993
+    }
+  },
+  {
+    "commit": "6d9e94bf6cf72fe73012524e1461a93dc58ff265",
+    "total_mass": 10693.681166829545,
+    "erosion_ratio": 0.22744093035735402,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22744093035735402,
+      "10": 0.09653597417511461,
+      "15": 0.04294116800482993
+    }
+  },
+  {
+    "commit": "1f9bb2538e50f1e6d1bc2e3d06a361ba2af0b632",
+    "total_mass": 10693.681166829545,
+    "erosion_ratio": 0.22744093035735402,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22744093035735402,
+      "10": 0.09653597417511461,
+      "15": 0.04294116800482993
+    }
+  },
+  {
+    "commit": "ee0a00bdb1ab039e178a215ad5712fb7fa58e58f",
+    "total_mass": 10695.163372147776,
+    "erosion_ratio": 0.22748550131170076,
+    "high_complexity_function_count": 41,
+    "maximum_function_cc": 23,
+    "maximum_function_mass": 233.8461032388609,
+    "erosion_by_cutoff": {
+      "5": 0.22748550131170076,
+      "10": 0.09652259559179203,
+      "15": 0.04293521693841111
+    }
+  }
+]
