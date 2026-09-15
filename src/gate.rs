@@ -94,12 +94,15 @@ pub(crate) fn build_working_tree_artifact(
     IndexArtifact::new(commit, files)
 }
 
-/// Computes the repository complexity summary for one immutable revision.
-pub(crate) fn summarize_revision(
+/// Computes repository summaries for several cutoffs with one source analysis.
+pub(crate) fn summarize_revision_with_cutoffs(
     repository: &GitRepository,
     revision: &str,
-    complexity_cutoff: u32,
-) -> Result<(String, RepositorySummary)> {
+    complexity_cutoffs: &[u32],
+) -> Result<(String, Vec<RepositorySummary>)> {
+    if complexity_cutoffs.is_empty() {
+        return Err(Error::invalid("complexity cutoffs", "must not be empty"));
+    }
     let commit = repository.resolve_revision(revision)?;
     let files = repository
         .rust_files(&commit)?
@@ -110,10 +113,11 @@ pub(crate) fn summarize_revision(
                 .and_then(|source| analyze_rust_file(&path, &source))
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok((
-        commit,
-        RepositorySummary::from_files_with_cutoff(&files, complexity_cutoff),
-    ))
+    let summaries = complexity_cutoffs
+        .iter()
+        .map(|cutoff| RepositorySummary::from_files_with_cutoff(&files, *cutoff))
+        .collect();
+    Ok((commit, summaries))
 }
 
 /// Binds a successfully built artifact to the active repository policy.

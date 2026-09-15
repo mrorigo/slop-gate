@@ -13,7 +13,7 @@ use crate::config::GateConfig;
 use crate::error::{Error, Result};
 use crate::gate::{
     bind_policy, build_artifact, build_working_tree_artifact, check_mass, limit_scan_report,
-    render_human, scan_clones,
+    render_human, scan_clones, summarize_revision_with_cutoffs,
 };
 use crate::git::GitRepository;
 use crate::sarif;
@@ -414,8 +414,11 @@ fn run_history(
             .revision_history(ref_name, count)?
             .into_iter()
             .map(|revision| {
-                let (commit, summary) =
-                    crate::gate::summarize_revision(&repository, &revision, cutoff)?;
+                let (commit, mut summaries) =
+                    summarize_revision_with_cutoffs(&repository, &revision, &[cutoff])?;
+                let summary = summaries
+                    .pop()
+                    .ok_or_else(|| Error::invalid("history summary", "missing summary"))?;
                 Ok(HistoryEntry {
                     commit,
                     total_mass: summary.total_mass,
