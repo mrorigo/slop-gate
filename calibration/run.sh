@@ -56,6 +56,22 @@ while IFS='	' read -r name url; do
     else
         printf '0\n' > "$repo_output/status"
     fi
+    : > "$repo_output/commits.jsonl"
+    git -C "$checkout" log --first-parent --format='%H%x09%P%x09%cI' -n 1200 |
+        awk 'NR % 60 == 1 { print }' |
+        while IFS='	' read -r commit parent date; do
+            test -n "$parent" || continue
+            window="$repo_output/.window.json"
+            if (cd "$checkout" && "$binary" history --ref "$commit" --count 2 --format json > "$window" 2>>"$repo_output/stderr.log") && jq -e 'type == "array" and length == 2' "$window" >/dev/null; then
+                jq -c --arg repository "$name" --arg commit "$commit" --arg parent "$parent" --arg date "$date" \
+                    '{repository: $repository, commit: $commit, parent: $parent, date: $date, status: "ok", head: .[1], base: .[0], erosion_delta: (.[1].erosion_ratio - .[0].erosion_ratio)}' \
+                    "$window" >> "$repo_output/commits.jsonl"
+            else
+                jq -nc --arg repository "$name" --arg commit "$commit" --arg parent "$parent" --arg date "$date" \
+                    '{repository: $repository, commit: $commit, parent: $parent, date: $date, status: "analysis-error"}' >> "$repo_output/commits.jsonl"
+            fi
+        done
+    rm -f "$repo_output/.window.json"
 done
 failed=$(find "$output" -type f -name status -exec grep -l '^1$' {} + | wc -l | tr -d ' ')
 [ "$failed" -eq 0 ]
