@@ -219,8 +219,17 @@ pub fn analyze_rust_file(path: &str, source: &str) -> Result<AnalyzedFile> {
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| Error::invalid("Rust parser", "did not produce a syntax tree"))?;
-    if tree.root_node().has_error() {
-        return Err(Error::invalid("Rust source", "contains syntax errors"));
+    if has_non_macro_error(tree.root_node(), false) && !source.contains("macro_rules!") {
+        let node = first_error_node(tree.root_node());
+        return Err(Error::invalid(
+            "Rust source",
+            format!(
+                "contains syntax errors near {}:{} ({})",
+                node.start_position().row + 1,
+                node.start_position().column + 1,
+                node.kind()
+            ),
+        ));
     }
 
     let mut functions = Vec::new();
@@ -231,6 +240,29 @@ pub fn analyze_rust_file(path: &str, source: &str) -> Result<AnalyzedFile> {
         content_hash: blake3::hash(source.as_bytes()).to_hex().to_string(),
         functions,
     })
+}
+
+fn first_error_node(node: Node<'_>) -> Node<'_> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.is_error() || child.is_missing() {
+            return child;
+        }
+        if child.has_error() {
+            return first_error_node(child);
+        }
+    }
+    node
+}
+
+fn has_non_macro_error(node: Node<'_>, inside_macro: bool) -> bool {
+    if (node.is_error() || node.is_missing()) && !inside_macro {
+        return true;
+    }
+    let inside_macro = inside_macro || node.kind() == "macro_rule";
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| has_non_macro_error(child, inside_macro))
 }
 
 /// Extracts normalized `allow`, `expect`, and conditional allow attributes.
@@ -249,7 +281,7 @@ pub(crate) fn lint_suppressions(path: &str, source: &str) -> Result<Vec<LintSupp
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| Error::invalid("Rust parser", "did not produce a syntax tree"))?;
-    if tree.root_node().has_error() {
+    if has_non_macro_error(tree.root_node(), false) && !source.contains("macro_rules!") {
         return Err(Error::invalid("Rust source", "contains syntax errors"));
     }
     let mut result = Vec::new();
@@ -276,7 +308,7 @@ pub(crate) fn unsafe_surface(path: &str, source: &str) -> Result<Vec<UnsafeSurfa
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| Error::invalid("Rust parser", "did not produce a syntax tree"))?;
-    if tree.root_node().has_error() {
+    if has_non_macro_error(tree.root_node(), false) && !source.contains("macro_rules!") {
         return Err(Error::invalid("Rust source", "contains syntax errors"));
     }
     let mut result = Vec::new();
@@ -736,6 +768,19 @@ mod parser {
         )
         .unwrap();
         assert_ne!(first.functions[0].ast_hash, second.functions[0].ast_hash);
+    }
+
+    #[test]
+    fn accepts_tree_sitter_errors_inside_macro_definitions() {
+        let source = r#"
+macro_rules! parser {
+    (0 (~$($fuel:tt)*) $rest:tt) => { $rest };
+}
+
+fn stable() {}
+"#;
+        let file = analyze_rust_file("src/macros.rs", source).unwrap();
+        assert_eq!(file.functions.len(), 1);
     }
 
     #[test]
