@@ -68,9 +68,10 @@ pub(crate) fn build_artifact(repository: &GitRepository, revision: &str) -> Resu
         .rust_files(&commit)?
         .into_iter()
         .map(|path| {
-            repository
-                .read_blob(&commit, &path)
-                .and_then(|source| analyze_rust_file(&path, &source))
+            repository.read_blob(&commit, &path).and_then(|source| {
+                analyze_rust_file(&path, &source)
+                    .map_err(|error| Error::invalid("Rust source", format!("{path}: {error}")))
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     IndexArtifact::new(commit, files)
@@ -108,9 +109,10 @@ pub(crate) fn summarize_revision_with_cutoffs(
         .rust_files(&commit)?
         .into_iter()
         .map(|path| {
-            repository
-                .read_blob(&commit, &path)
-                .and_then(|source| analyze_rust_file(&path, &source))
+            repository.read_blob(&commit, &path).and_then(|source| {
+                analyze_rust_file(&path, &source)
+                    .map_err(|error| Error::invalid("Rust source", format!("{path}: {error}")))
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     let summaries = complexity_cutoffs
