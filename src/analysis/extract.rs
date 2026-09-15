@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use tree_sitter::{Node, Parser};
 
 use crate::error::{Error, Result};
+use crate::path::is_relative_path;
 
 use super::{
     AnalyzedFile, DependencyEdge, FunctionIdentity, FunctionKind, FunctionRecord, LintSuppression,
@@ -671,15 +672,6 @@ fn node_text<'a>(node: Node<'_>, source: &'a str) -> Result<&'a str> {
             subject: "Tree-sitter node range",
             detail: error.to_string(),
         })
-}
-
-fn is_relative_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.starts_with('/')
-        && !path.contains('\\')
-        && path
-            .split('/')
-            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::path::is_relative_path;
 
 /// The only supported configuration schema version.
 const CONFIG_VERSION: u32 = 1;
@@ -36,6 +37,8 @@ pub(crate) struct Rules {
     pub(crate) unsafe_surface: UnsafeSurfaceRule,
     #[serde(default)]
     pub(crate) dependency_surface: DependencySurfaceRule,
+    #[serde(default)]
+    pub(crate) structural_erosion: StructuralErosionRule,
 }
 
 /// Lint-suppression growth policy.
@@ -93,6 +96,22 @@ pub(crate) struct NearCloneRule {
     pub(crate) max_candidates: usize,
 }
 
+/// Structural erosion policy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StructuralErosionRule {
+    #[serde(default)]
+    pub(crate) severity: RuleSeverity,
+    #[serde(default = "default_erosion_limit")]
+    pub(crate) erosion_limit: f64,
+    #[serde(default = "default_erosion_delta_limit")]
+    pub(crate) delta_limit: f64,
+    #[serde(default = "default_complexity_cutoff")]
+    pub(crate) complexity_cutoff: u32,
+    #[serde(default = "default_top_contributors")]
+    pub(crate) top_contributors: usize,
+}
+
 /// Whether a rule is disabled, advisory, or merge-blocking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -141,6 +160,18 @@ impl Default for NearCloneRule {
             minimum_tokens: default_minimum_tokens(),
             similarity_threshold: default_similarity_threshold(),
             max_candidates: default_max_candidates(),
+        }
+    }
+}
+
+impl Default for StructuralErosionRule {
+    fn default() -> Self {
+        Self {
+            severity: RuleSeverity::Warn,
+            erosion_limit: default_erosion_limit(),
+            delta_limit: default_erosion_delta_limit(),
+            complexity_cutoff: default_complexity_cutoff(),
+            top_contributors: default_top_contributors(),
         }
     }
 }
@@ -214,6 +245,19 @@ impl GateConfig {
                 "must be positive and similarity must be within 0.0..=1.0",
             ));
         }
+        let erosion = &self.rules.structural_erosion;
+        if !erosion.erosion_limit.is_finite()
+            || !(0.0..=1.0).contains(&erosion.erosion_limit)
+            || !erosion.delta_limit.is_finite()
+            || erosion.delta_limit < 0.0
+            || erosion.top_contributors == 0
+            || erosion.top_contributors > 10
+        {
+            return Err(Error::invalid(
+                "structural-erosion thresholds",
+                "limits must be finite, erosion_limit must be within 0.0..=1.0, and top_contributors must be within 1..=10",
+            ));
+        }
         for suppression in &self.suppressions {
             if !matches!(
                 suppression.rule.as_str(),
@@ -222,6 +266,7 @@ impl GateConfig {
                     | "lint-suppression-growth"
                     | "unsafe-surface-growth"
                     | "dependency-surface-growth"
+                    | "structural-erosion"
             ) || !is_relative_path(&suppression.path)
                 || suppression.reason.trim().is_empty()
                 || suppression.line == Some(0)
@@ -257,14 +302,17 @@ fn default_similarity_threshold() -> f64 {
 fn default_max_candidates() -> usize {
     64
 }
-
-fn is_relative_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.starts_with('/')
-        && !path.contains('\\')
-        && path
-            .split('/')
-            .all(|part| !part.is_empty() && part != "." && part != "..")
+fn default_erosion_limit() -> f64 {
+    0.50
+}
+fn default_erosion_delta_limit() -> f64 {
+    0.08
+}
+fn default_complexity_cutoff() -> u32 {
+    10
+}
+fn default_top_contributors() -> usize {
+    3
 }
 
 #[cfg(test)]
@@ -277,6 +325,20 @@ mod tests {
         assert_eq!(config.rules.function_mass.severity, RuleSeverity::Warn);
         assert_eq!(config.rules.near_clone.severity, RuleSeverity::Warn);
         assert_eq!(config.rules.lint_suppression.severity, RuleSeverity::Warn);
+        assert_eq!(config.rules.structural_erosion.erosion_limit, 0.50);
+        assert_eq!(config.rules.structural_erosion.delta_limit, 0.08);
+        assert_eq!(config.rules.structural_erosion.complexity_cutoff, 10);
+        assert_eq!(config.rules.structural_erosion.top_contributors, 3);
+    }
+
+    #[test]
+    fn rejects_invalid_structural_erosion_limits() {
+        assert!(
+            GateConfig::from_toml("[rules.structural_erosion]\nerosion_limit = 1.1\n").is_err()
+        );
+        assert!(
+            GateConfig::from_toml("[rules.structural_erosion]\ntop_contributors = 0\n").is_err()
+        );
     }
 
     #[test]

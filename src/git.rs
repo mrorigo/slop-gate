@@ -7,6 +7,7 @@ use std::process::{Command, Output};
 use std::sync::Arc;
 
 use crate::error::{Error, Result};
+use crate::path::is_relative_path;
 
 /// Executes Git commands for a repository boundary.
 pub(crate) trait GitRunner: Send + Sync {
@@ -379,15 +380,6 @@ fn run_git_bytes(runner: &dyn GitRunner, directory: &Path, arguments: &[&str]) -
         operation: "command",
         detail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
     })
-}
-
-fn is_relative_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.starts_with('/')
-        && !path.contains('\\')
-        && path
-            .split('/')
-            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 #[cfg(test)]

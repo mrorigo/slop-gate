@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::path::is_relative_path;
 
 use super::{AnalyzedFile, RepositorySummary};
 
@@ -243,15 +244,6 @@ pub fn analyzer_fingerprint_with_policy(policy: &str) -> String {
 
 fn is_git_object_id(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn is_relative_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.starts_with('/')
-        && !path.contains('\\')
-        && path
-            .split('/')
-            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 #[cfg(test)]

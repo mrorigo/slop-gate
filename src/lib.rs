@@ -10,6 +10,7 @@ mod config;
 mod error;
 mod gate;
 mod git;
+mod path;
 mod sarif;
 
 pub use error::{AppError, AppResult};
