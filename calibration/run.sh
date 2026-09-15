@@ -53,18 +53,11 @@ while IFS='	' read -r name url; do
     branch=$(git -C "$checkout" symbolic-ref --short HEAD)
     head=$(git -C "$checkout" rev-parse HEAD)
     printf 'repository = "%s"\nbranch = "%s"\nhead = "%s"\n' "$name" "$branch" "$head" >> "$output/manifest.lock"
-    if ! (cd "$checkout" && "$binary" history --ref "$head" --count 20 --complexity-cutoff "$(printf '%s' "$cutoffs" | cut -d, -f1)" --format json > "$repo_output/history.json" 2>>"$repo_output/stderr.log") || ! jq -e 'type == "array" and length > 0' "$repo_output/history.json" >/dev/null; then
+    if ! (cd "$checkout" && "$binary" history --ref "$head" --count 20 --complexity-cutoffs "$cutoffs" --format json > "$repo_output/history.json" 2>>"$repo_output/stderr.log") || ! jq -e 'type == "array" and length > 0' "$repo_output/history.json" >/dev/null; then
         printf '1\n' > "$repo_output/status"
     else
         printf '0\n' > "$repo_output/status"
     fi
-    old_cutoff=$(printf '%s' "$cutoffs" | cut -d, -f1)
-    old_rest=$(printf '%s' "$cutoffs" | cut -d, -f2-)
-    for cutoff in $(printf '%s' "$old_rest" | tr ',' ' '); do
-        [ -n "$cutoff" ] || continue
-        [ "$cutoff" = "$old_cutoff" ] && continue
-        (cd "$checkout" && "$binary" history --ref "$head" --count 20 --complexity-cutoff "$cutoff" --format json > "$repo_output/history-cutoff-$cutoff.json" 2>>"$repo_output/stderr.log") || true
-    done
     : > "$repo_output/commits.jsonl"
     metadata="$repo_output/.metadata.json"
     git -C "$checkout" log --first-parent --format='%H%x09%P%x09%cI' -n 20 |

@@ -2,6 +2,7 @@
 //! Command-line interface for `slop-gate`.
 
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -58,8 +59,15 @@ pub fn main() -> ExitCode {
             ref_name,
             count,
             complexity_cutoff,
+            complexity_cutoffs,
             format,
-        } => run_history(&ref_name, count, complexity_cutoff, format),
+        } => run_history(
+            &ref_name,
+            count,
+            complexity_cutoff,
+            complexity_cutoffs,
+            format,
+        ),
     }
 }
 
@@ -142,6 +150,9 @@ enum Command {
         /// Override the structural-erosion complexity cutoff.
         #[arg(long, value_name = "CC")]
         complexity_cutoff: Option<u32>,
+        /// Evaluate several cutoffs in one source analysis, separated by commas.
+        #[arg(long, value_name = "CC,CC,...", conflicts_with = "complexity_cutoff")]
+        complexity_cutoffs: Option<String>,
         /// Report encoding written to stdout.
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
@@ -156,6 +167,7 @@ struct HistoryEntry {
     high_complexity_function_count: usize,
     maximum_function_cc: u32,
     maximum_function_mass: f64,
+    erosion_by_cutoff: BTreeMap<u32, f64>,
 }
 
 const POLICY_TEMPLATE: &str = r#"# Slop Gate policy. Missing values use warning-only defaults.
@@ -390,6 +402,7 @@ fn run_history(
     ref_name: &str,
     count: usize,
     complexity_cutoff: Option<u32>,
+    complexity_cutoffs: Option<String>,
     format: OutputFormat,
 ) -> ExitCode {
     let result = (|| {
@@ -403,8 +416,23 @@ fn run_history(
         })?;
         let repository = GitRepository::open(&current_dir)?;
         let config = GateConfig::load(repository.root())?;
-        let cutoff = complexity_cutoff.unwrap_or(config.rules.structural_erosion.complexity_cutoff);
-        if cutoff == 0 {
+        let cutoffs = complexity_cutoffs
+            .map(|values| {
+                values
+                    .split(',')
+                    .map(|value| {
+                        value
+                            .parse::<u32>()
+                            .map_err(|_| Error::invalid("complexity cutoff", "must be an integer"))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .unwrap_or_else(|| {
+                Ok(vec![complexity_cutoff.unwrap_or(
+                    config.rules.structural_erosion.complexity_cutoff,
+                )])
+            })?;
+        if cutoffs.is_empty() || cutoffs.contains(&0) {
             return Err(Error::invalid(
                 "complexity cutoff",
                 "must be greater than zero",
@@ -415,10 +443,13 @@ fn run_history(
             .into_iter()
             .map(|revision| {
                 let (commit, mut summaries) =
-                    summarize_revision_with_cutoffs(&repository, &revision, &[cutoff])?;
-                let summary = summaries
-                    .pop()
-                    .ok_or_else(|| Error::invalid("history summary", "missing summary"))?;
+                    summarize_revision_with_cutoffs(&repository, &revision, &cutoffs)?;
+                let erosion_by_cutoff = cutoffs
+                    .iter()
+                    .zip(summaries.iter().map(|summary| summary.erosion_ratio))
+                    .map(|(cutoff, ratio)| (*cutoff, ratio))
+                    .collect();
+                let summary = summaries.remove(0);
                 Ok(HistoryEntry {
                     commit,
                     total_mass: summary.total_mass,
@@ -426,6 +457,7 @@ fn run_history(
                     high_complexity_function_count: summary.high_complexity_function_count,
                     maximum_function_cc: summary.maximum_function_cc,
                     maximum_function_mass: summary.maximum_function_mass,
+                    erosion_by_cutoff,
                 })
             })
             .collect::<Result<Vec<_>>>()
