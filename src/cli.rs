@@ -1,6 +1,7 @@
 // Rust guideline compliant 2026-09-12
 //! Command-line interface for `slop-gate`.
 
+use serde::Serialize;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -53,6 +54,11 @@ pub fn main() -> ExitCode {
             top,
             format,
         }),
+        Command::History {
+            ref_name,
+            count,
+            format,
+        } => run_history(&ref_name, count, format),
     }
 }
 
@@ -124,6 +130,28 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
     },
+    /// Report complexity erosion across a bounded first-parent history.
+    History {
+        /// Revision at the end of the history window.
+        #[arg(long = "ref", default_value = "HEAD")]
+        ref_name: String,
+        /// Number of commits to include, from 1 through 100.
+        #[arg(long, default_value_t = 10)]
+        count: usize,
+        /// Report encoding written to stdout.
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        format: OutputFormat,
+    },
+}
+
+#[derive(Debug, Serialize)]
+struct HistoryEntry {
+    commit: String,
+    total_mass: f64,
+    erosion_ratio: f64,
+    high_complexity_function_count: usize,
+    maximum_function_cc: u32,
+    maximum_function_mass: f64,
 }
 
 const POLICY_TEMPLATE: &str = r#"# Slop Gate policy. Missing values use warning-only defaults.
@@ -149,6 +177,13 @@ severity = "warn"
 
 [rules.dependency_surface]
 severity = "warn"
+
+[rules.structural_erosion]
+severity = "warn"
+erosion_limit = 0.50
+delta_limit = 0.08
+complexity_cutoff = 10
+top_contributors = 3
 
 # Add an exact-location exception only after review.
 # [[suppressions]]
@@ -347,6 +382,76 @@ fn run_scan(options: ScanOptions<'_>) -> ExitCode {
     }
 }
 
+fn run_history(ref_name: &str, count: usize, format: OutputFormat) -> ExitCode {
+    let result = (|| {
+        if !(1..=100).contains(&count) {
+            return Err(Error::invalid("history count", "must be within 1..=100"));
+        }
+        let current_dir = std::env::current_dir().map_err(|source| Error::Io {
+            operation: "determine current directory",
+            path: PathBuf::from("."),
+            source,
+        })?;
+        let repository = GitRepository::open(&current_dir)?;
+        let config = GateConfig::load(repository.root())?;
+        let cutoff = config.rules.structural_erosion.complexity_cutoff;
+        repository
+            .revision_history(ref_name, count)?
+            .into_iter()
+            .map(|revision| {
+                let (commit, summary) =
+                    crate::gate::summarize_revision(&repository, &revision, cutoff)?;
+                Ok(HistoryEntry {
+                    commit,
+                    total_mass: summary.total_mass,
+                    erosion_ratio: summary.erosion_ratio,
+                    high_complexity_function_count: summary.high_complexity_function_count,
+                    maximum_function_cc: summary.maximum_function_cc,
+                    maximum_function_mass: summary.maximum_function_mass,
+                })
+            })
+            .collect::<Result<Vec<_>>>()
+    })();
+    match result {
+        Ok(entries) => {
+            let rendered = match format {
+                OutputFormat::Human => entries
+                    .iter()
+                    .map(|entry| {
+                        format!(
+                            "{}: erosion {:.2}% (mass {:.2}, high-CC {})\n",
+                            entry.commit,
+                            entry.erosion_ratio * 100.0,
+                            entry.total_mass,
+                            entry.high_complexity_function_count
+                        )
+                    })
+                    .collect::<String>(),
+                OutputFormat::Json => match serde_json::to_string_pretty(&entries) {
+                    Ok(json) => json + "\n",
+                    Err(error) => {
+                        write_error("history", &Error::invalid("history JSON", error));
+                        return ExitCode::from(2);
+                    }
+                },
+                OutputFormat::Sarif => {
+                    write_error(
+                        "history",
+                        &Error::invalid("history format", "supports only human and json"),
+                    );
+                    return ExitCode::from(2);
+                }
+            };
+            print!("{rendered}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            write_error("history", &error);
+            ExitCode::from(2)
+        }
+    }
+}
+
 fn run_scan_result(options: &ScanOptions<'_>) -> Result<crate::gate::CheckReport> {
     let current_dir = std::env::current_dir().map_err(|source| Error::Io {
         operation: "determine current directory",
@@ -480,7 +585,7 @@ mod tests {
             .get_subcommands()
             .map(|subcommand| subcommand.get_name())
             .collect();
-        assert_eq!(names, ["init", "index", "check", "scan"]);
+        assert_eq!(names, ["init", "index", "check", "scan", "history"]);
     }
 
     #[test]

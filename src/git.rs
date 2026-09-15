@@ -79,6 +79,22 @@ impl GitRepository {
             .map(|value| value.trim().to_string())
     }
 
+    /// Lists up to `count` first-parent commits ending at `revision`.
+    pub(crate) fn revision_history(&self, revision: &str, count: usize) -> Result<Vec<String>> {
+        let count = count.to_string();
+        let output = self.run_git(&[
+            "log",
+            "--first-parent",
+            "--format=%H",
+            "-n",
+            &count,
+            revision,
+        ])?;
+        let mut commits = output.lines().map(String::from).collect::<Vec<_>>();
+        commits.reverse();
+        Ok(commits)
+    }
+
     /// Lists Rust source paths tracked by one revision in stable Git order.
     pub(crate) fn rust_files(&self, revision: &str) -> Result<Vec<String>> {
         let output = self.run_git(&["ls-tree", "-r", "--name-only", revision])?;

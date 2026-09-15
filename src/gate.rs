@@ -94,6 +94,28 @@ pub(crate) fn build_working_tree_artifact(
     IndexArtifact::new(commit, files)
 }
 
+/// Computes the repository complexity summary for one immutable revision.
+pub(crate) fn summarize_revision(
+    repository: &GitRepository,
+    revision: &str,
+    complexity_cutoff: u32,
+) -> Result<(String, RepositorySummary)> {
+    let commit = repository.resolve_revision(revision)?;
+    let files = repository
+        .rust_files(&commit)?
+        .into_iter()
+        .map(|path| {
+            repository
+                .read_blob(&commit, &path)
+                .and_then(|source| analyze_rust_file(&path, &source))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((
+        commit,
+        RepositorySummary::from_files_with_cutoff(&files, complexity_cutoff),
+    ))
+}
+
 /// Binds a successfully built artifact to the active repository policy.
 pub(crate) fn bind_policy(artifact: &mut IndexArtifact, config: &GateConfig) -> Result<()> {
     artifact.analyzer_fingerprint = analyzer_fingerprint_with_policy(&config.fingerprint()?);
