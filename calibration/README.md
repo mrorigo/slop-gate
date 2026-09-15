@@ -13,7 +13,9 @@ Run from the repository root:
 The runner clones each repository into a temporary directory, resolves its
 default branch, samples first-parent history, and writes results under
 `calibration/results` (or `--output`). It records resolved commits in
-`manifest.lock` and removes checkouts when it exits.
+`manifest.lock` and removes checkouts when it exits. If the preferred window
+contains invalid historical Rust, it tries up to five earlier windows. Use
+`--retries N` to change that bounded limit.
 
 The run requires `git`, `jq`, and a built Slop Gate binary. Network access is
 needed only for cloning.
