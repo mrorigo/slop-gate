@@ -30,6 +30,7 @@ while IFS='	' read -r name url; do
     metadata="$dir/.metadata.json"
     git -C "$checkout" log --first-parent --format='%H%x09%P%x09%cI' -n 200 |
         while IFS='	' read -r commit parent date; do
+            parent=$(git -C "$checkout" rev-parse "$commit^1")
             lines=$(git -C "$checkout" diff --numstat "$parent" "$commit" | awk -F '	' '{ if ($1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/) total += $1 + $2 } END { print total + 0 }')
             printf '%s\t%s\t%s\t%s\n' "$commit" "$parent" "$date" "$lines"
         done |
