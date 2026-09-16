@@ -64,6 +64,18 @@ and `0.2638` for cutoffs 5, 10, and 15. The monthly data confirms that erosion
 level varies materially across repositories and time; it does not yet provide
 commit-level reviewer classifications.
 
+The high-churn run is preserved in `calibration/results-high-churn/`. It
+selected the five largest first-parent diffs from the most recent 200 commits
+in each accepted repository: 70 commits total, with 68 valid analyses and two
+analysis failures. The valid erosion deltas ranged from `-0.0227137` to
+`0.0465756`; the median was `-0.0000055`, p95 was `0.0067620`, and no sample
+exceeded `0.08`. Each record now retains the commit subject and changed paths,
+which are the inputs required for reviewer classification.
+
+This is measurement context, not reviewer classification. Contributor
+stability and human actionability remain unrecorded; the high-churn sample must
+not be used as evidence that the rule is ready for error severity.
+
 The run therefore does not satisfy the plan's threshold-decision criteria.
 The rule remains warning-only.
 

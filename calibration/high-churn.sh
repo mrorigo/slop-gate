@@ -35,16 +35,25 @@ while IFS='	' read -r name url; do
             printf '%s\t%s\t%s\t%s\n' "$commit" "$parent" "$date" "$lines"
         done |
         sort -t '	' -k4,4nr | head -5 |
-        awk -F '	' '{ printf "{\"commit\":\"%s\",\"parent\":\"%s\",\"date\":\"%s\",\"changed_lines\":%s}\n", $1, $2, $3, $4 }' |
-        jq -s . > "$metadata"
+        while IFS='	' read -r commit parent date changed_lines; do
+            subject=$(git -C "$checkout" show -s --format='%s' "$commit")
+            paths=$(git -C "$checkout" diff-tree --no-commit-id --name-only -r "$commit" | jq -Rsc 'split("\n") | map(select(length > 0))')
+            jq -nc --arg commit "$commit" --arg parent "$parent" --arg date "$date" \
+                --arg subject "$subject" --argjson paths "$paths" --argjson changed_lines "$changed_lines" \
+                '{commit:$commit,parent:$parent,date:$date,subject:$subject,paths:$paths,changed_lines:$changed_lines}'
+        done > "$metadata"
     : > "$dir/high-churn.jsonl"
-    jq -r '.[] | [.commit, .parent, .date, .changed_lines] | @tsv' "$metadata" |
-    while IFS='	' read -r commit parent date changed_lines; do
+    jq -c '.' "$metadata" |
+    while IFS= read -r record; do
+        commit=$(printf '%s\n' "$record" | jq -r '.commit')
+        parent=$(printf '%s\n' "$record" | jq -r '.parent')
+        date=$(printf '%s\n' "$record" | jq -r '.date')
+        changed_lines=$(printf '%s\n' "$record" | jq -r '.changed_lines')
         window="$dir/.window.json"
         if (cd "$checkout" && "$binary" history --ref "$commit" --count 2 --complexity-cutoffs 5,10,15 --format json > "$window" 2>>"$dir/stderr.log") && jq -e 'length == 2' "$window" >/dev/null; then
-            jq -c --arg repository "$name" --arg commit "$commit" --arg parent "$parent" --arg date "$date" --argjson changed_lines "$changed_lines" '{repository:$repository,commit:$commit,parent:$parent,date:$date,changed_lines:$changed_lines,status:"ok",base:.[0],head:.[1],erosion_delta:(.[1].erosion_ratio - .[0].erosion_ratio)}' "$window" >> "$dir/high-churn.jsonl"
+            jq -c --arg repository "$name" --argjson context "$record" '{repository:$repository} + $context + {status:"ok",base:.[0],head:.[1],erosion_delta:(.[1].erosion_ratio - .[0].erosion_ratio)}' "$window" >> "$dir/high-churn.jsonl"
         else
-            jq -nc --arg repository "$name" --arg commit "$commit" --arg parent "$parent" --arg date "$date" --argjson changed_lines "$changed_lines" '{repository:$repository,commit:$commit,parent:$parent,date:$date,changed_lines:$changed_lines,status:"analysis-error"}' >> "$dir/high-churn.jsonl"
+            jq -nc --arg repository "$name" --argjson context "$record" '{repository:$repository} + $context + {status:"analysis-error"}' >> "$dir/high-churn.jsonl"
         fi
     done
     rm -f "$metadata" "$dir/.window.json"
