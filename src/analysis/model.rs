@@ -68,6 +68,101 @@ pub struct FunctionRecord {
     pub ast_shingle_hashes: Vec<u64>,
 }
 
+/// Aggregate complexity facts for one analyzed repository revision.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RepositorySummary {
+    /// Sum of function mass across the analyzed revision.
+    pub total_mass: f64,
+    /// Sum of mass for functions with complexity above the configured cutoff.
+    pub high_complexity_mass: f64,
+    /// Share of total mass held by high-complexity functions.
+    pub erosion_ratio: f64,
+    /// Number of functions above the complexity cutoff.
+    pub high_complexity_function_count: usize,
+    /// Highest cyclomatic complexity among analyzed functions.
+    pub maximum_function_cc: u32,
+    /// Highest function mass among analyzed functions.
+    pub maximum_function_mass: f64,
+    /// Largest high-complexity functions, ordered by descending mass.
+    pub top_contributors: Vec<ContributorLocation>,
+}
+
+/// A deterministic location contributing to structural erosion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContributorLocation {
+    /// Repository-relative source path.
+    pub path: String,
+    /// Qualified declaration name.
+    pub qualified_name: String,
+    /// One-based declaration line.
+    pub line: usize,
+    /// Cyclomatic complexity.
+    pub cc: u32,
+    /// Function mass.
+    pub mass: f64,
+}
+
+impl RepositorySummary {
+    /// Computes aggregate complexity facts using the default erosion cutoff.
+    pub fn from_files(files: &[AnalyzedFile]) -> Self {
+        Self::from_files_with_cutoff(files, 10)
+    }
+
+    /// Computes aggregate complexity facts using a caller-supplied cutoff.
+    pub fn from_files_with_cutoff(files: &[AnalyzedFile], complexity_cutoff: u32) -> Self {
+        let functions = files.iter().flat_map(|file| file.functions.iter());
+        let mut contributors = Vec::new();
+        let mut total_mass = 0.0;
+        let mut high_complexity_mass = 0.0;
+        let mut high_complexity_function_count = 0;
+        let mut maximum_function_cc = 0;
+        let mut maximum_function_mass: f64 = 0.0;
+
+        for function in functions {
+            total_mass += function.mass;
+            maximum_function_cc = maximum_function_cc.max(function.cc);
+            maximum_function_mass = maximum_function_mass.max(function.mass);
+            if function.cc > complexity_cutoff {
+                high_complexity_mass += function.mass;
+                high_complexity_function_count += 1;
+                contributors.push(ContributorLocation {
+                    path: function.identity.path.clone(),
+                    qualified_name: function.identity.qualified_name.clone(),
+                    line: function.start_line,
+                    cc: function.cc,
+                    mass: function.mass,
+                });
+            }
+        }
+
+        contributors.sort_by(|left, right| {
+            right
+                .mass
+                .total_cmp(&left.mass)
+                .then_with(|| left.path.cmp(&right.path))
+                .then_with(|| left.line.cmp(&right.line))
+                .then_with(|| left.qualified_name.cmp(&right.qualified_name))
+        });
+        contributors.truncate(3);
+
+        let erosion_ratio = if total_mass == 0.0 {
+            0.0
+        } else {
+            high_complexity_mass / total_mass
+        };
+
+        Self {
+            total_mass,
+            high_complexity_mass,
+            erosion_ratio,
+            high_complexity_function_count,
+            maximum_function_cc,
+            maximum_function_mass,
+            top_contributors: contributors,
+        }
+    }
+}
+
 /// A normalized Rust lint-suppression observation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LintSuppression {

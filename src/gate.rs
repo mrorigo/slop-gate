@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde::Serialize;
 
 use crate::analysis::{
-    FunctionIdentity, FunctionRecord, IndexArtifact, analyze_rust_file, analyzer_fingerprint,
-    analyzer_fingerprint_with_policy,
+    FunctionIdentity, FunctionRecord, IndexArtifact, RepositorySummary, analyze_rust_file,
+    analyzer_fingerprint, analyzer_fingerprint_with_policy,
 };
 use crate::analysis::{dependency_edges, lint_suppressions, unsafe_surface};
 use crate::config::{GateConfig, NearCloneRule, RuleSeverity};
@@ -68,9 +68,10 @@ pub(crate) fn build_artifact(repository: &GitRepository, revision: &str) -> Resu
         .rust_files(&commit)?
         .into_iter()
         .map(|path| {
-            repository
-                .read_blob(&commit, &path)
-                .and_then(|source| analyze_rust_file(&path, &source))
+            repository.read_blob(&commit, &path).and_then(|source| {
+                analyze_rust_file(&path, &source)
+                    .map_err(|error| Error::invalid("Rust source", format!("{path}: {error}")))
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     IndexArtifact::new(commit, files)
@@ -92,6 +93,33 @@ pub(crate) fn build_working_tree_artifact(
         })
         .collect::<Result<Vec<_>>>()?;
     IndexArtifact::new(commit, files)
+}
+
+/// Computes repository summaries for several cutoffs with one source analysis.
+pub(crate) fn summarize_revision_with_cutoffs(
+    repository: &GitRepository,
+    revision: &str,
+    complexity_cutoffs: &[u32],
+) -> Result<(String, Vec<RepositorySummary>)> {
+    if complexity_cutoffs.is_empty() {
+        return Err(Error::invalid("complexity cutoffs", "must not be empty"));
+    }
+    let commit = repository.resolve_revision(revision)?;
+    let files = repository
+        .rust_files(&commit)?
+        .into_iter()
+        .map(|path| {
+            repository.read_blob(&commit, &path).and_then(|source| {
+                analyze_rust_file(&path, &source)
+                    .map_err(|error| Error::invalid("Rust source", format!("{path}: {error}")))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let summaries = complexity_cutoffs
+        .iter()
+        .map(|cutoff| RepositorySummary::from_files_with_cutoff(&files, *cutoff))
+        .collect();
+    Ok((commit, summaries))
 }
 
 /// Binds a successfully built artifact to the active repository policy.
@@ -301,6 +329,46 @@ pub(crate) fn check_mass(
             &mut report,
         )?;
     }
+    if !report
+        .findings
+        .iter()
+        .any(|finding| finding.rule_id == "analysis-error")
+    {
+        let head_files = repository
+            .rust_files(&head_commit)?
+            .into_iter()
+            .map(|path| {
+                repository
+                    .read_blob(&head_commit, &path)
+                    .and_then(|source| analyze_rust_file(&path, &source))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let policy = &config.rules.structural_erosion;
+        let head_summary =
+            RepositorySummary::from_files_with_cutoff(&head_files, policy.complexity_cutoff);
+        let base_summary =
+            RepositorySummary::from_files_with_cutoff(&artifact.files, policy.complexity_cutoff);
+        let delta = head_summary.erosion_ratio - base_summary.erosion_ratio;
+        if head_summary.erosion_ratio > policy.erosion_limit || delta > policy.delta_limit {
+            push_if_enabled(
+                &mut report,
+                erosion_finding(ErosionFindingInput {
+                    head_files: &head_files,
+                    base_functions: &base_functions,
+                    renamed_from: &changed.renamed_from,
+                    added_lines: &changed.added_lines,
+                    head: &head_summary,
+                    base: &base_summary,
+                    delta,
+                    erosion_limit: policy.erosion_limit,
+                    delta_limit: policy.delta_limit,
+                    complexity_cutoff: policy.complexity_cutoff,
+                    top_contributors: policy.top_contributors,
+                }),
+                config,
+            );
+        }
+    }
     report.findings.sort_by(finding_order);
     Ok(report)
 }
@@ -425,6 +493,131 @@ fn clone_finding(
         delta: None,
         threshold: Some(threshold),
         similarity: Some(similarity),
+        properties,
+    }
+}
+
+struct ErosionFindingInput<'a> {
+    head_files: &'a [crate::analysis::AnalyzedFile],
+    base_functions: &'a HashMap<FunctionIdentity, &'a FunctionRecord>,
+    renamed_from: &'a HashMap<String, String>,
+    added_lines: &'a HashMap<String, ChangedLineSet>,
+    head: &'a RepositorySummary,
+    base: &'a RepositorySummary,
+    delta: f64,
+    erosion_limit: f64,
+    delta_limit: f64,
+    complexity_cutoff: u32,
+    top_contributors: usize,
+}
+
+fn erosion_finding(input: ErosionFindingInput<'_>) -> Finding {
+    let ErosionFindingInput {
+        head_files,
+        base_functions,
+        renamed_from,
+        added_lines,
+        head,
+        base,
+        delta,
+        erosion_limit,
+        delta_limit,
+        complexity_cutoff,
+        top_contributors,
+    } = input;
+    let mut contributors = head_files
+        .iter()
+        .flat_map(|file| {
+            let previous_path = renamed_from.get(&file.path);
+            file.functions.iter().filter_map(move |function| {
+                let changed_in_function = added_lines.get(&file.path).is_some_and(|lines| {
+                    (function.start_line..=function.end_line).any(|line| lines.contains(line))
+                });
+                if !changed_in_function {
+                    return None;
+                }
+                let identity = renamed_identity(&function.identity, previous_path);
+                let base_mass = base_functions.get(&identity).map(|base| base.mass);
+                (function.cc > complexity_cutoff
+                    && base_mass.is_none_or(|mass| function.mass > mass))
+                .then_some((function, base_mass))
+            })
+        })
+        .collect::<Vec<_>>();
+    contributors.sort_by(|(left, left_base), (right, right_base)| {
+        let left_increase = left.mass - left_base.unwrap_or(0.0);
+        let right_increase = right.mass - right_base.unwrap_or(0.0);
+        right_increase
+            .total_cmp(&left_increase)
+            .then_with(|| right.mass.total_cmp(&left.mass))
+            .then_with(|| left.identity.path.cmp(&right.identity.path))
+            .then_with(|| left.start_line.cmp(&right.start_line))
+            .then_with(|| {
+                left.identity
+                    .qualified_name
+                    .cmp(&right.identity.qualified_name)
+            })
+    });
+    let location = contributors
+        .first()
+        .map(|(function, _)| Location {
+            path: function.identity.path.clone(),
+            line: function.start_line,
+        })
+        .unwrap_or_else(|| Location {
+            path: "<repository>".to_string(),
+            line: 1,
+        });
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "base_erosion_ratio".to_string(),
+        format!("{:.6}", base.erosion_ratio),
+    );
+    properties.insert(
+        "head_erosion_ratio".to_string(),
+        format!("{:.6}", head.erosion_ratio),
+    );
+    properties.insert("erosion_delta".to_string(), format!("{delta:.6}"));
+    properties.insert(
+        "complexity_cutoff".to_string(),
+        complexity_cutoff.to_string(),
+    );
+    properties.insert("erosion_limit".to_string(), format!("{erosion_limit:.6}"));
+    properties.insert("delta_limit".to_string(), format!("{delta_limit:.6}"));
+    for (index, (function, base_mass)) in contributors.iter().take(top_contributors).enumerate() {
+        let prefix = format!("contributor_{}", index + 1);
+        properties.insert(format!("{prefix}_path"), function.identity.path.clone());
+        properties.insert(
+            format!("{prefix}_qualified_name"),
+            function.identity.qualified_name.clone(),
+        );
+        properties.insert(format!("{prefix}_line"), function.start_line.to_string());
+        properties.insert(format!("{prefix}_cc"), function.cc.to_string());
+        properties.insert(
+            format!("{prefix}_head_mass"),
+            format!("{:.6}", function.mass),
+        );
+        properties.insert(
+            format!("{prefix}_base_mass"),
+            base_mass.map_or_else(|| "new".to_string(), |mass| format!("{mass:.6}")),
+        );
+    }
+    Finding {
+        rule_id: "structural-erosion".to_string(),
+        severity: Severity::Error,
+        message: format!(
+            "structural erosion increased to {:.2}% (base {:.2}%, delta {:.2}%)",
+            head.erosion_ratio * 100.0,
+            base.erosion_ratio * 100.0,
+            delta * 100.0
+        ),
+        location,
+        base_location: None,
+        base_mass: Some(base.high_complexity_mass),
+        head_mass: Some(head.high_complexity_mass),
+        delta: Some(delta),
+        threshold: Some(delta_limit),
+        similarity: None,
         properties,
     }
 }
@@ -1057,6 +1250,7 @@ fn push_if_enabled(report: &mut CheckReport, mut finding: Finding, config: &Gate
         "lint-suppression-growth" => config.rules.lint_suppression.severity,
         "unsafe-surface-growth" => config.rules.unsafe_surface.severity,
         "dependency-surface-growth" => config.rules.dependency_surface.severity,
+        "structural-erosion" => config.rules.structural_erosion.severity,
         _ => return report.findings.push(finding),
     };
     finding.severity = match policy {
@@ -1159,9 +1353,39 @@ mod tests {
             &GateConfig::default(),
         )
         .unwrap();
-        assert_eq!(report.findings.len(), 1);
-        assert_eq!(report.findings[0].rule_id, "function-mass");
+        assert_eq!(
+            report
+                .findings
+                .iter()
+                .filter(|finding| finding.rule_id == "function-mass")
+                .count(),
+            1
+        );
         assert!(!report.has_errors());
+    }
+
+    #[test]
+    fn structural_erosion_attribution_ignores_unchanged_dominant_functions() {
+        let body = std::iter::repeat_n("    if flag {}\n", 30).collect::<String>();
+        let repository = TestRepository::new(&format!("fn dominant(flag: bool) {{\n{body}}}\n"));
+        let git_repo = repository.repository();
+        let mut artifact = build_artifact(&git_repo, "HEAD").unwrap();
+        repository.commit_source(&format!(
+            "fn dominant(flag: bool) {{\n{body}}}\nfn helper() {{}}\n"
+        ));
+        let mut config = GateConfig::default();
+        config.rules.structural_erosion.erosion_limit = 0.0;
+        config.rules.structural_erosion.delta_limit = 1.0;
+        bind_policy(&mut artifact, &config).unwrap();
+
+        let report = check_mass(&git_repo, "HEAD~1", "HEAD", &artifact, &config).unwrap();
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule_id == "structural-erosion")
+            .expect("structural-erosion finding");
+        assert_eq!(finding.location.path, "<repository>");
+        assert!(!finding.properties.contains_key("contributor_1_path"));
     }
 
     #[test]
@@ -1199,8 +1423,12 @@ mod tests {
             &GateConfig::default(),
         )
         .unwrap();
-        assert_eq!(report.findings.len(), 1);
-        assert!(report.findings[0].base_mass.is_none());
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule_id == "function-mass")
+            .expect("function-mass finding");
+        assert!(finding.base_mass.is_none());
     }
 
     #[test]

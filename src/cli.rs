@@ -1,18 +1,20 @@
 // Rust guideline compliant 2026-09-12
 //! Command-line interface for `slop-gate`.
 
+use serde::Serialize;
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::analysis::IndexArtifact;
+use crate::analysis::{ContributorLocation, IndexArtifact};
 use crate::config::GateConfig;
 use crate::error::{Error, Result};
 use crate::gate::{
     bind_policy, build_artifact, build_working_tree_artifact, check_mass, limit_scan_report,
-    render_human, scan_clones,
+    render_human, scan_clones, summarize_revision_with_cutoffs,
 };
 use crate::git::GitRepository;
 use crate::sarif;
@@ -53,6 +55,19 @@ pub fn main() -> ExitCode {
             top,
             format,
         }),
+        Command::History {
+            ref_name,
+            count,
+            complexity_cutoff,
+            complexity_cutoffs,
+            format,
+        } => run_history(
+            &ref_name,
+            count,
+            complexity_cutoff,
+            complexity_cutoffs,
+            format,
+        ),
     }
 }
 
@@ -124,6 +139,36 @@ enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
     },
+    /// Report complexity erosion across a bounded first-parent history.
+    History {
+        /// Revision at the end of the history window.
+        #[arg(long = "ref", default_value = "HEAD")]
+        ref_name: String,
+        /// Number of commits to include, from 1 through 100.
+        #[arg(long, default_value_t = 10)]
+        count: usize,
+        /// Override the structural-erosion complexity cutoff.
+        #[arg(long, value_name = "CC")]
+        complexity_cutoff: Option<u32>,
+        /// Evaluate several cutoffs in one source analysis, separated by commas.
+        #[arg(long, value_name = "CC,CC,...", conflicts_with = "complexity_cutoff")]
+        complexity_cutoffs: Option<String>,
+        /// Report encoding written to stdout.
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        format: OutputFormat,
+    },
+}
+
+#[derive(Debug, Serialize)]
+struct HistoryEntry {
+    commit: String,
+    total_mass: f64,
+    erosion_ratio: f64,
+    high_complexity_function_count: usize,
+    maximum_function_cc: u32,
+    maximum_function_mass: f64,
+    top_contributors: Vec<ContributorLocation>,
+    erosion_by_cutoff: BTreeMap<u32, f64>,
 }
 
 const POLICY_TEMPLATE: &str = r#"# Slop Gate policy. Missing values use warning-only defaults.
@@ -149,6 +194,13 @@ severity = "warn"
 
 [rules.dependency_surface]
 severity = "warn"
+
+[rules.structural_erosion]
+severity = "warn"
+erosion_limit = 0.50
+delta_limit = 0.08
+complexity_cutoff = 10
+top_contributors = 3
 
 # Add an exact-location exception only after review.
 # [[suppressions]]
@@ -347,6 +399,129 @@ fn run_scan(options: ScanOptions<'_>) -> ExitCode {
     }
 }
 
+fn run_history(
+    ref_name: &str,
+    count: usize,
+    complexity_cutoff: Option<u32>,
+    complexity_cutoffs: Option<String>,
+    format: OutputFormat,
+) -> ExitCode {
+    let result = collect_history_entries(ref_name, count, complexity_cutoff, complexity_cutoffs);
+    match result {
+        Ok(entries) => match render_history(&entries, format) {
+            Ok(rendered) => {
+                print!("{rendered}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                write_error("history", &error);
+                ExitCode::from(2)
+            }
+        },
+        Err(error) => {
+            write_error("history", &error);
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn collect_history_entries(
+    ref_name: &str,
+    count: usize,
+    complexity_cutoff: Option<u32>,
+    complexity_cutoffs: Option<String>,
+) -> Result<Vec<HistoryEntry>> {
+    if !(1..=100).contains(&count) {
+        return Err(Error::invalid("history count", "must be within 1..=100"));
+    }
+    let current_dir = std::env::current_dir().map_err(|source| Error::Io {
+        operation: "determine current directory",
+        path: PathBuf::from("."),
+        source,
+    })?;
+    let repository = GitRepository::open(&current_dir)?;
+    let config = GateConfig::load(repository.root())?;
+    let cutoffs = parse_history_cutoffs(
+        complexity_cutoff,
+        complexity_cutoffs,
+        config.rules.structural_erosion.complexity_cutoff,
+    )?;
+    repository
+        .revision_history(ref_name, count)?
+        .into_iter()
+        .map(|revision| {
+            let (commit, mut summaries) =
+                summarize_revision_with_cutoffs(&repository, &revision, &cutoffs)?;
+            let erosion_by_cutoff = cutoffs
+                .iter()
+                .zip(summaries.iter().map(|summary| summary.erosion_ratio))
+                .map(|(cutoff, ratio)| (*cutoff, ratio))
+                .collect();
+            let summary = summaries.remove(0);
+            Ok(HistoryEntry {
+                commit,
+                total_mass: summary.total_mass,
+                erosion_ratio: summary.erosion_ratio,
+                high_complexity_function_count: summary.high_complexity_function_count,
+                maximum_function_cc: summary.maximum_function_cc,
+                maximum_function_mass: summary.maximum_function_mass,
+                top_contributors: summary.top_contributors,
+                erosion_by_cutoff,
+            })
+        })
+        .collect()
+}
+
+fn parse_history_cutoffs(
+    complexity_cutoff: Option<u32>,
+    complexity_cutoffs: Option<String>,
+    default_cutoff: u32,
+) -> Result<Vec<u32>> {
+    let cutoffs = complexity_cutoffs
+        .map(|values| {
+            values
+                .split(',')
+                .map(|value| {
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| Error::invalid("complexity cutoff", "must be an integer"))
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .unwrap_or_else(|| Ok(vec![complexity_cutoff.unwrap_or(default_cutoff)]))?;
+    if cutoffs.is_empty() || cutoffs.contains(&0) {
+        return Err(Error::invalid(
+            "complexity cutoff",
+            "must be greater than zero",
+        ));
+    }
+    Ok(cutoffs)
+}
+
+fn render_history(entries: &[HistoryEntry], format: OutputFormat) -> Result<String> {
+    match format {
+        OutputFormat::Human => Ok(entries
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{}: erosion {:.2}% (mass {:.2}, high-CC {})\n",
+                    entry.commit,
+                    entry.erosion_ratio * 100.0,
+                    entry.total_mass,
+                    entry.high_complexity_function_count
+                )
+            })
+            .collect()),
+        OutputFormat::Json => serde_json::to_string_pretty(entries)
+            .map(|json| json + "\n")
+            .map_err(|error| Error::invalid("history JSON", error)),
+        OutputFormat::Sarif => Err(Error::invalid(
+            "history format",
+            "supports only human and json",
+        )),
+    }
+}
+
 fn run_scan_result(options: &ScanOptions<'_>) -> Result<crate::gate::CheckReport> {
     let current_dir = std::env::current_dir().map_err(|source| Error::Io {
         operation: "determine current directory",
@@ -480,7 +655,7 @@ mod tests {
             .get_subcommands()
             .map(|subcommand| subcommand.get_name())
             .collect();
-        assert_eq!(names, ["init", "index", "check", "scan"]);
+        assert_eq!(names, ["init", "index", "check", "scan", "history"]);
     }
 
     #[test]

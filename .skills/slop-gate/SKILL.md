@@ -6,7 +6,12 @@ description: Install and run Slop Gate for deterministic Rust code-quality check
 # Slop Gate
 
 Use Slop Gate to detect newly introduced Rust function growth, near-clones,
-lint suppressions, unsafe surface, and production/build dependency surface.
+lint suppressions, unsafe surface, production/build dependency surface, and
+repository-level structural erosion. Use `history` to inspect erosion across a
+bounded first-parent commit window.
+History JSON includes deterministic top-contributor paths, qualified names,
+lines, complexity, and mass. `check` attributes erosion findings only to
+high-complexity functions whose source ranges intersect added head lines.
 The `index` and `check` commands evaluate Git revisions. The `scan` command can
 also inspect uncommitted working-tree edits.
 
@@ -115,6 +120,12 @@ The command refuses to overwrite `.slop-gate.toml`. Use
    ```sh
    slop-gate scan --ref "$HEAD" --format json
    ```
+
+For a bounded historical erosion view, use:
+
+```sh
+slop-gate history --ref "$HEAD" --count 20 --format json
+```
 
 For a local pre-commit audit, include working-tree changes:
 

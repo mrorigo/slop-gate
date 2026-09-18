@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use tree_sitter::{Node, Parser};
 
 use crate::error::{Error, Result};
+use crate::path::is_relative_path;
 
 use super::{
     AnalyzedFile, DependencyEdge, FunctionIdentity, FunctionKind, FunctionRecord, LintSuppression,
@@ -218,8 +219,20 @@ pub fn analyze_rust_file(path: &str, source: &str) -> Result<AnalyzedFile> {
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| Error::invalid("Rust parser", "did not produce a syntax tree"))?;
-    if tree.root_node().has_error() {
-        return Err(Error::invalid("Rust source", "contains syntax errors"));
+    if has_non_macro_error(tree.root_node(), false)
+        && !has_macro_syntax(tree.root_node())
+        && !source_has_macro_syntax(source)
+    {
+        let node = first_error_node(tree.root_node());
+        return Err(Error::invalid(
+            "Rust source",
+            format!(
+                "contains syntax errors near {}:{} ({})",
+                node.start_position().row + 1,
+                node.start_position().column + 1,
+                node.kind()
+            ),
+        ));
     }
 
     let mut functions = Vec::new();
@@ -229,6 +242,46 @@ pub fn analyze_rust_file(path: &str, source: &str) -> Result<AnalyzedFile> {
         language: LANGUAGE.to_string(),
         content_hash: blake3::hash(source.as_bytes()).to_hex().to_string(),
         functions,
+    })
+}
+
+fn first_error_node(node: Node<'_>) -> Node<'_> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.is_error() || child.is_missing() {
+            return child;
+        }
+        if child.has_error() {
+            return first_error_node(child);
+        }
+    }
+    node
+}
+
+fn has_non_macro_error(node: Node<'_>, inside_macro: bool) -> bool {
+    if (node.is_error() || node.is_missing()) && !inside_macro {
+        return true;
+    }
+    let inside_macro = inside_macro || node.kind() == "macro_rule";
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| has_non_macro_error(child, inside_macro))
+}
+
+fn has_macro_syntax(node: Node<'_>) -> bool {
+    if matches!(node.kind(), "macro_rule" | "macro_invocation") {
+        return true;
+    }
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(has_macro_syntax)
+}
+
+fn source_has_macro_syntax(source: &str) -> bool {
+    source.lines().any(|line| {
+        line.find('!').is_some_and(|index| {
+            let rest = line[index + 1..].trim_start();
+            rest.starts_with('(') || rest.starts_with('{') || rest.starts_with('[')
+        })
     })
 }
 
@@ -248,7 +301,10 @@ pub(crate) fn lint_suppressions(path: &str, source: &str) -> Result<Vec<LintSupp
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| Error::invalid("Rust parser", "did not produce a syntax tree"))?;
-    if tree.root_node().has_error() {
+    if has_non_macro_error(tree.root_node(), false)
+        && !has_macro_syntax(tree.root_node())
+        && !source_has_macro_syntax(source)
+    {
         return Err(Error::invalid("Rust source", "contains syntax errors"));
     }
     let mut result = Vec::new();
@@ -275,7 +331,10 @@ pub(crate) fn unsafe_surface(path: &str, source: &str) -> Result<Vec<UnsafeSurfa
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| Error::invalid("Rust parser", "did not produce a syntax tree"))?;
-    if tree.root_node().has_error() {
+    if has_non_macro_error(tree.root_node(), false)
+        && !has_macro_syntax(tree.root_node())
+        && !source_has_macro_syntax(source)
+    {
         return Err(Error::invalid("Rust source", "contains syntax errors"));
     }
     let mut result = Vec::new();
@@ -673,15 +732,6 @@ fn node_text<'a>(node: Node<'_>, source: &'a str) -> Result<&'a str> {
         })
 }
 
-fn is_relative_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.starts_with('/')
-        && !path.contains('\\')
-        && path
-            .split('/')
-            .all(|part| !part.is_empty() && part != "." && part != "..")
-}
-
 #[cfg(test)]
 mod tests {
     use super::{analyze_rust_file, dependency_edges, lint_suppressions};
@@ -744,6 +794,19 @@ mod parser {
         )
         .unwrap();
         assert_ne!(first.functions[0].ast_hash, second.functions[0].ast_hash);
+    }
+
+    #[test]
+    fn accepts_tree_sitter_errors_inside_macro_definitions() {
+        let source = r#"
+macro_rules! parser {
+    (0 (~$($fuel:tt)*) $rest:tt) => { $rest };
+}
+
+fn stable() {}
+"#;
+        let file = analyze_rust_file("src/macros.rs", source).unwrap();
+        assert_eq!(file.functions.len(), 1);
     }
 
     #[test]

@@ -7,6 +7,7 @@ use std::process::{Command, Output};
 use std::sync::Arc;
 
 use crate::error::{Error, Result};
+use crate::path::is_relative_path;
 
 /// Executes Git commands for a repository boundary.
 pub(crate) trait GitRunner: Send + Sync {
@@ -76,6 +77,22 @@ impl GitRepository {
         let expression = format!("{revision}^{{commit}}");
         self.run_git(&["rev-parse", "--verify", &expression])
             .map(|value| value.trim().to_string())
+    }
+
+    /// Lists up to `count` first-parent commits ending at `revision`.
+    pub(crate) fn revision_history(&self, revision: &str, count: usize) -> Result<Vec<String>> {
+        let count = count.to_string();
+        let output = self.run_git(&[
+            "log",
+            "--first-parent",
+            "--format=%H",
+            "-n",
+            &count,
+            revision,
+        ])?;
+        let mut commits = output.lines().map(String::from).collect::<Vec<_>>();
+        commits.reverse();
+        Ok(commits)
     }
 
     /// Lists Rust source paths tracked by one revision in stable Git order.
@@ -379,15 +396,6 @@ fn run_git_bytes(runner: &dyn GitRunner, directory: &Path, arguments: &[&str]) -
         operation: "command",
         detail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
     })
-}
-
-fn is_relative_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.starts_with('/')
-        && !path.contains('\\')
-        && path
-            .split('/')
-            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 #[cfg(test)]
