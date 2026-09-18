@@ -166,13 +166,7 @@ impl Default for NearCloneRule {
 
 impl Default for StructuralErosionRule {
     fn default() -> Self {
-        Self {
-            severity: RuleSeverity::Warn,
-            erosion_limit: default_erosion_limit(),
-            delta_limit: default_erosion_delta_limit(),
-            complexity_cutoff: default_complexity_cutoff(),
-            top_contributors: default_top_contributors(),
-        }
+        default_structural_erosion_rule()
     }
 }
 
@@ -313,6 +307,16 @@ fn default_complexity_cutoff() -> u32 {
 }
 fn default_top_contributors() -> usize {
     3
+}
+
+fn default_structural_erosion_rule() -> StructuralErosionRule {
+    StructuralErosionRule {
+        severity: RuleSeverity::Warn,
+        erosion_limit: default_erosion_limit(),
+        delta_limit: default_erosion_delta_limit(),
+        complexity_cutoff: default_complexity_cutoff(),
+        top_contributors: default_top_contributors(),
+    }
 }
 
 #[cfg(test)]
