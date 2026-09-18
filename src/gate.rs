@@ -1351,6 +1351,30 @@ mod tests {
     }
 
     #[test]
+    fn structural_erosion_attribution_ignores_unchanged_dominant_functions() {
+        let body = std::iter::repeat_n("    if flag {}\n", 30).collect::<String>();
+        let repository = TestRepository::new(&format!("fn dominant(flag: bool) {{\n{body}}}\n"));
+        let git_repo = repository.repository();
+        let mut artifact = build_artifact(&git_repo, "HEAD").unwrap();
+        repository.commit_source(&format!(
+            "fn dominant(flag: bool) {{\n{body}}}\nfn helper() {{}}\n"
+        ));
+        let mut config = GateConfig::default();
+        config.rules.structural_erosion.erosion_limit = 0.0;
+        config.rules.structural_erosion.delta_limit = 1.0;
+        bind_policy(&mut artifact, &config).unwrap();
+
+        let report = check_mass(&git_repo, "HEAD~1", "HEAD", &artifact, &config).unwrap();
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule_id == "structural-erosion")
+            .expect("structural-erosion finding");
+        assert_eq!(finding.location.path, "<repository>");
+        assert!(!finding.properties.contains_key("contributor_1_path"));
+    }
+
+    #[test]
     fn does_not_flag_an_unchanged_renamed_function() {
         let repository = TestRepository::new("fn parse(flag: bool) { if flag {} }\n");
         let git_repo = repository.repository();

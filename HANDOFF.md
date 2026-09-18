@@ -1,18 +1,19 @@
 # Handoff
 
-Date: 2026-09-15
+Date: 2026-09-18
 
 ## 0.4 structural erosion
 
-P9.0 through P9.3 are implemented locally. Artifacts now contain repository
+P9.0 through P9.4 are implemented locally. Artifacts now contain repository
 complexity summaries, `check` reports warning-only structural-erosion findings
-with bounded contributor evidence, and `history --ref <REV> --count <N>` reports
-chronological first-parent summaries.
+with bounded contributor evidence restricted to functions intersecting added
+head lines, and `history --ref <REV> --count <N>` reports chronological
+first-parent summaries with top contributor locations.
 
 P9.4 documentation and local validation are complete. The preliminary evidence
-is recorded in `docs/EROSION-CALIBRATION-REPORT.md`. The required calibration
-across at least 20 maintained Rust repositories remains a release gate before
-promoting structural erosion beyond warning severity.
+is recorded in `docs/EROSION-CALIBRATION-REPORT.md`. The calibration decision
+accepts the 14-repository exploratory panel. It supports shipping structural
+erosion as warning-only; it does not support promotion beyond warning severity.
 
 ## 0.3.3 maintenance release
 
