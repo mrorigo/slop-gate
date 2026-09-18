@@ -352,19 +352,19 @@ pub(crate) fn check_mass(
         if head_summary.erosion_ratio > policy.erosion_limit || delta > policy.delta_limit {
             push_if_enabled(
                 &mut report,
-                erosion_finding(
-                    &head_files,
-                    &base_functions,
-                    &changed.renamed_from,
-                    &changed.added_lines,
-                    &head_summary,
-                    &base_summary,
+                erosion_finding(ErosionFindingInput {
+                    head_files: &head_files,
+                    base_functions: &base_functions,
+                    renamed_from: &changed.renamed_from,
+                    added_lines: &changed.added_lines,
+                    head: &head_summary,
+                    base: &base_summary,
                     delta,
-                    policy.erosion_limit,
-                    policy.delta_limit,
-                    policy.complexity_cutoff,
-                    policy.top_contributors,
-                ),
+                    erosion_limit: policy.erosion_limit,
+                    delta_limit: policy.delta_limit,
+                    complexity_cutoff: policy.complexity_cutoff,
+                    top_contributors: policy.top_contributors,
+                }),
                 config,
             );
         }
@@ -497,20 +497,34 @@ fn clone_finding(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn erosion_finding(
-    head_files: &[crate::analysis::AnalyzedFile],
-    base_functions: &HashMap<FunctionIdentity, &FunctionRecord>,
-    renamed_from: &HashMap<String, String>,
-    added_lines: &HashMap<String, ChangedLineSet>,
-    head: &RepositorySummary,
-    base: &RepositorySummary,
+struct ErosionFindingInput<'a> {
+    head_files: &'a [crate::analysis::AnalyzedFile],
+    base_functions: &'a HashMap<FunctionIdentity, &'a FunctionRecord>,
+    renamed_from: &'a HashMap<String, String>,
+    added_lines: &'a HashMap<String, ChangedLineSet>,
+    head: &'a RepositorySummary,
+    base: &'a RepositorySummary,
     delta: f64,
     erosion_limit: f64,
     delta_limit: f64,
     complexity_cutoff: u32,
     top_contributors: usize,
-) -> Finding {
+}
+
+fn erosion_finding(input: ErosionFindingInput<'_>) -> Finding {
+    let ErosionFindingInput {
+        head_files,
+        base_functions,
+        renamed_from,
+        added_lines,
+        head,
+        base,
+        delta,
+        erosion_limit,
+        delta_limit,
+        complexity_cutoff,
+        top_contributors,
+    } = input;
     let mut contributors = head_files
         .iter()
         .flat_map(|file| {

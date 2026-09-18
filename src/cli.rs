@@ -406,101 +406,119 @@ fn run_history(
     complexity_cutoffs: Option<String>,
     format: OutputFormat,
 ) -> ExitCode {
-    let result = (|| {
-        if !(1..=100).contains(&count) {
-            return Err(Error::invalid("history count", "must be within 1..=100"));
-        }
-        let current_dir = std::env::current_dir().map_err(|source| Error::Io {
-            operation: "determine current directory",
-            path: PathBuf::from("."),
-            source,
-        })?;
-        let repository = GitRepository::open(&current_dir)?;
-        let config = GateConfig::load(repository.root())?;
-        let cutoffs = complexity_cutoffs
-            .map(|values| {
-                values
-                    .split(',')
-                    .map(|value| {
-                        value
-                            .parse::<u32>()
-                            .map_err(|_| Error::invalid("complexity cutoff", "must be an integer"))
-                    })
-                    .collect::<Result<Vec<_>>>()
-            })
-            .unwrap_or_else(|| {
-                Ok(vec![complexity_cutoff.unwrap_or(
-                    config.rules.structural_erosion.complexity_cutoff,
-                )])
-            })?;
-        if cutoffs.is_empty() || cutoffs.contains(&0) {
-            return Err(Error::invalid(
-                "complexity cutoff",
-                "must be greater than zero",
-            ));
-        }
-        repository
-            .revision_history(ref_name, count)?
-            .into_iter()
-            .map(|revision| {
-                let (commit, mut summaries) =
-                    summarize_revision_with_cutoffs(&repository, &revision, &cutoffs)?;
-                let erosion_by_cutoff = cutoffs
-                    .iter()
-                    .zip(summaries.iter().map(|summary| summary.erosion_ratio))
-                    .map(|(cutoff, ratio)| (*cutoff, ratio))
-                    .collect();
-                let summary = summaries.remove(0);
-                Ok(HistoryEntry {
-                    commit,
-                    total_mass: summary.total_mass,
-                    erosion_ratio: summary.erosion_ratio,
-                    high_complexity_function_count: summary.high_complexity_function_count,
-                    maximum_function_cc: summary.maximum_function_cc,
-                    maximum_function_mass: summary.maximum_function_mass,
-                    top_contributors: summary.top_contributors,
-                    erosion_by_cutoff,
-                })
-            })
-            .collect::<Result<Vec<_>>>()
-    })();
+    let result = collect_history_entries(ref_name, count, complexity_cutoff, complexity_cutoffs);
     match result {
-        Ok(entries) => {
-            let rendered = match format {
-                OutputFormat::Human => entries
-                    .iter()
-                    .map(|entry| {
-                        format!(
-                            "{}: erosion {:.2}% (mass {:.2}, high-CC {})\n",
-                            entry.commit,
-                            entry.erosion_ratio * 100.0,
-                            entry.total_mass,
-                            entry.high_complexity_function_count
-                        )
-                    })
-                    .collect::<String>(),
-                OutputFormat::Json => match serde_json::to_string_pretty(&entries) {
-                    Ok(json) => json + "\n",
-                    Err(error) => {
-                        write_error("history", &Error::invalid("history JSON", error));
-                        return ExitCode::from(2);
-                    }
-                },
-                OutputFormat::Sarif => {
-                    write_error(
-                        "history",
-                        &Error::invalid("history format", "supports only human and json"),
-                    );
-                    return ExitCode::from(2);
-                }
-            };
-            print!("{rendered}");
-            ExitCode::SUCCESS
-        }
+        Ok(entries) => match render_history(&entries, format) {
+            Ok(rendered) => {
+                print!("{rendered}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                write_error("history", &error);
+                ExitCode::from(2)
+            }
+        },
         Err(error) => {
             write_error("history", &error);
             ExitCode::from(2)
         }
+    }
+}
+
+fn collect_history_entries(
+    ref_name: &str,
+    count: usize,
+    complexity_cutoff: Option<u32>,
+    complexity_cutoffs: Option<String>,
+) -> Result<Vec<HistoryEntry>> {
+    if !(1..=100).contains(&count) {
+        return Err(Error::invalid("history count", "must be within 1..=100"));
+    }
+    let current_dir = std::env::current_dir().map_err(|source| Error::Io {
+        operation: "determine current directory",
+        path: PathBuf::from("."),
+        source,
+    })?;
+    let repository = GitRepository::open(&current_dir)?;
+    let config = GateConfig::load(repository.root())?;
+    let cutoffs = parse_history_cutoffs(
+        complexity_cutoff,
+        complexity_cutoffs,
+        config.rules.structural_erosion.complexity_cutoff,
+    )?;
+    repository
+        .revision_history(ref_name, count)?
+        .into_iter()
+        .map(|revision| {
+            let (commit, mut summaries) =
+                summarize_revision_with_cutoffs(&repository, &revision, &cutoffs)?;
+            let erosion_by_cutoff = cutoffs
+                .iter()
+                .zip(summaries.iter().map(|summary| summary.erosion_ratio))
+                .map(|(cutoff, ratio)| (*cutoff, ratio))
+                .collect();
+            let summary = summaries.remove(0);
+            Ok(HistoryEntry {
+                commit,
+                total_mass: summary.total_mass,
+                erosion_ratio: summary.erosion_ratio,
+                high_complexity_function_count: summary.high_complexity_function_count,
+                maximum_function_cc: summary.maximum_function_cc,
+                maximum_function_mass: summary.maximum_function_mass,
+                top_contributors: summary.top_contributors,
+                erosion_by_cutoff,
+            })
+        })
+        .collect()
+}
+
+fn parse_history_cutoffs(
+    complexity_cutoff: Option<u32>,
+    complexity_cutoffs: Option<String>,
+    default_cutoff: u32,
+) -> Result<Vec<u32>> {
+    let cutoffs = complexity_cutoffs
+        .map(|values| {
+            values
+                .split(',')
+                .map(|value| {
+                    value
+                        .parse::<u32>()
+                        .map_err(|_| Error::invalid("complexity cutoff", "must be an integer"))
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .unwrap_or_else(|| Ok(vec![complexity_cutoff.unwrap_or(default_cutoff)]))?;
+    if cutoffs.is_empty() || cutoffs.contains(&0) {
+        return Err(Error::invalid(
+            "complexity cutoff",
+            "must be greater than zero",
+        ));
+    }
+    Ok(cutoffs)
+}
+
+fn render_history(entries: &[HistoryEntry], format: OutputFormat) -> Result<String> {
+    match format {
+        OutputFormat::Human => Ok(entries
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{}: erosion {:.2}% (mass {:.2}, high-CC {})\n",
+                    entry.commit,
+                    entry.erosion_ratio * 100.0,
+                    entry.total_mass,
+                    entry.high_complexity_function_count
+                )
+            })
+            .collect()),
+        OutputFormat::Json => serde_json::to_string_pretty(entries)
+            .map(|json| json + "\n")
+            .map_err(|error| Error::invalid("history JSON", error)),
+        OutputFormat::Sarif => Err(Error::invalid(
+            "history format",
+            "supports only human and json",
+        )),
     }
 }
 
