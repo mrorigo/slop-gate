@@ -1,5 +1,7 @@
 # tree-sitter-rust reports errors for valid macro-heavy Rust
 
+Status: PR to upstream opened: https://github.com/tree-sitter/tree-sitter-rust/pull/317
+
 ## Summary
 
 `tree-sitter-rust` 0.24 reports `ERROR` nodes for valid Rust in macro-heavy
