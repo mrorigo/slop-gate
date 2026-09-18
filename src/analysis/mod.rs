@@ -15,4 +15,7 @@ pub(crate) use extract::unsafe_surface;
 pub(crate) use model::DependencyEdge;
 pub(crate) use model::LintSuppression;
 pub(crate) use model::UnsafeSurface;
-pub use model::{AnalyzedFile, FunctionIdentity, FunctionKind, FunctionRecord, RepositorySummary};
+pub use model::{
+    AnalyzedFile, ContributorLocation, FunctionIdentity, FunctionKind, FunctionRecord,
+    RepositorySummary,
+};

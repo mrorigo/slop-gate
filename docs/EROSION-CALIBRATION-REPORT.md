@@ -76,6 +76,26 @@ This is measurement context, not reviewer classification. Contributor
 stability and human actionability remain unrecorded; the high-churn sample must
 not be used as evidence that the rule is ready for error severity.
 
+A provisional subject/path audit classified the 68 valid high-churn commits as
+52 expected-maintenance commits, 15 feature-growth commits, and one deliberate
+refactoring commit. These labels are keyword-based triage only; they are not
+reviewer judgments and are excluded from threshold fitting. No contributor
+stability or reviewer-actionability result is claimed by this report.
+
+The contributor-aware reruns are preserved in
+`calibration/results-monthly-contributors/` and
+`calibration/results-high-churn-contributors/`. All 168 monthly checkpoints
+and 68 valid high-churn records include top-contributor locations. The leading
+contributor remained the same path and qualified function across 152 of 154
+adjacent monthly pairs (98.70%). This is strong persistence evidence for the
+current panel, although it does not establish that the location is the one a
+human reviewer would choose first.
+
+Contributor selection now uses only high-complexity functions whose source
+range intersects an added head line. Unchanged dominant functions remain part
+of the repository erosion ratio but cannot be reported as change contributors.
+This addresses the main actionability failure observed in the review sample.
+
 The run therefore does not satisfy the plan's threshold-decision criteria.
 The rule remains warning-only.
 

@@ -356,6 +356,7 @@ pub(crate) fn check_mass(
                     &head_files,
                     &base_functions,
                     &changed.renamed_from,
+                    &changed.added_lines,
                     &head_summary,
                     &base_summary,
                     delta,
@@ -501,6 +502,7 @@ fn erosion_finding(
     head_files: &[crate::analysis::AnalyzedFile],
     base_functions: &HashMap<FunctionIdentity, &FunctionRecord>,
     renamed_from: &HashMap<String, String>,
+    added_lines: &HashMap<String, ChangedLineSet>,
     head: &RepositorySummary,
     base: &RepositorySummary,
     delta: f64,
@@ -514,6 +516,12 @@ fn erosion_finding(
         .flat_map(|file| {
             let previous_path = renamed_from.get(&file.path);
             file.functions.iter().filter_map(move |function| {
+                let changed_in_function = added_lines.get(&file.path).is_some_and(|lines| {
+                    (function.start_line..=function.end_line).any(|line| lines.contains(line))
+                });
+                if !changed_in_function {
+                    return None;
+                }
                 let identity = renamed_identity(&function.identity, previous_path);
                 let base_mass = base_functions.get(&identity).map(|base| base.mass);
                 (function.cc > complexity_cutoff

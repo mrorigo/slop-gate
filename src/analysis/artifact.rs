@@ -9,7 +9,7 @@ use crate::path::is_relative_path;
 use super::{AnalyzedFile, RepositorySummary};
 
 /// Current on-disk schema version for [`IndexArtifact`].
-pub const ARTIFACT_VERSION: u32 = 3;
+pub const ARTIFACT_VERSION: u32 = 4;
 
 const ANALYZER_RULESET: &str = "slop-gate-analysis-v2|rust-function-item|rust-cc-v1|normalized-token-v1|shingle-v1|normalized-ast-v1|ast-shingle-v1|repository-summary-v1";
 
@@ -40,7 +40,7 @@ impl IndexArtifact {
     ///
     /// # Returns
     ///
-    /// Returns a schema-v3 artifact with files in stable path order.
+    /// Returns a schema-v4 artifact with files in stable path order.
     ///
     /// # Errors
     ///

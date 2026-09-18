@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::analysis::IndexArtifact;
+use crate::analysis::{ContributorLocation, IndexArtifact};
 use crate::config::GateConfig;
 use crate::error::{Error, Result};
 use crate::gate::{
@@ -167,6 +167,7 @@ struct HistoryEntry {
     high_complexity_function_count: usize,
     maximum_function_cc: u32,
     maximum_function_mass: f64,
+    top_contributors: Vec<ContributorLocation>,
     erosion_by_cutoff: BTreeMap<u32, f64>,
 }
 
@@ -457,6 +458,7 @@ fn run_history(
                     high_complexity_function_count: summary.high_complexity_function_count,
                     maximum_function_cc: summary.maximum_function_cc,
                     maximum_function_mass: summary.maximum_function_mass,
+                    top_contributors: summary.top_contributors,
                     erosion_by_cutoff,
                 })
             })
