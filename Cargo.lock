@@ -329,7 +329,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "slop-gate"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "blake3",
  "clap",
@@ -338,7 +338,7 @@ dependencies = [
  "thiserror",
  "toml",
  "tree-sitter",
- "tree-sitter-rust",
+ "tree-sitter-rust-orchard",
 ]
 
 [[package]]
@@ -443,10 +443,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca0d1bf6fdd806e43ae5198f82f527056d359def39e54e67a0f478ac09dac081"
 
 [[package]]
-name = "tree-sitter-rust"
-version = "0.24.2"
+name = "tree-sitter-rust-orchard"
+version = "0.16.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "439e577dbe07423ec2582ac62c7531120dbfccfa6e5f92406f93dd271a120e45"
+checksum = "ae59062ce889b2581ac33361c6a3799673c7496aafa64dd958ba0268c00e014f"
 dependencies = [
  "cc",
  "tree-sitter-language",

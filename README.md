@@ -61,6 +61,10 @@ cargo run --release -- --help
 
 The current supported gate language is Rust.
 
+Rust parsing uses `tree-sitter-rust-orchard`, including its fix for valid
+macro-rule patterns that use the `~` token. Slop Gate rejects Rust files with
+parser error nodes rather than applying a macro-specific recovery workaround.
+
 Create a policy file with warning-only defaults:
 
 ```sh

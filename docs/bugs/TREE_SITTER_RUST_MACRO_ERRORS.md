@@ -1,6 +1,7 @@
 # tree-sitter-rust reports errors for valid macro-heavy Rust
 
-Status: PR to upstream opened: https://github.com/tree-sitter/tree-sitter-rust/pull/317
+Status: fixed by `tree-sitter-rust-orchard` 0.16.10; Slop Gate migrated to
+that parser for v0.4.1.
 
 ## Summary
 
@@ -67,8 +68,12 @@ Please either accept these forms in the grammar or document a reliable node
 classification that lets consumers identify errors inside macro definitions
 and invocations.
 
-## Temporary consumer workaround
+## Historical consumer workaround
 
-Slop Gate now retains strict errors for ordinary Rust and tolerates parser
-errors associated with macro-heavy files. This is a compatibility workaround,
+The original Slop Gate workaround retained strict errors for ordinary Rust and
+tolerated parser errors associated with macro-heavy files. This was a
+compatibility workaround,
 not a claim that every error in such a file is harmless.
+
+The Orchard migration removes this workaround. Slop Gate now rejects every
+parser error node, including errors inside macro definitions and invocations.

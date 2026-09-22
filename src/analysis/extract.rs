@@ -212,17 +212,14 @@ pub fn analyze_rust_file(path: &str, source: &str) -> Result<AnalyzedFile> {
         ));
     }
     let mut parser = Parser::new();
-    let language = tree_sitter_rust::LANGUAGE.into();
+    let language = tree_sitter_rust_orchard::LANGUAGE.into();
     parser
         .set_language(&language)
         .map_err(|error| Error::invalid("Rust parser", error))?;
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| Error::invalid("Rust parser", "did not produce a syntax tree"))?;
-    if has_non_macro_error(tree.root_node(), false)
-        && !has_macro_syntax(tree.root_node())
-        && !source_has_macro_syntax(source)
-    {
+    if tree.root_node().has_error() {
         let node = first_error_node(tree.root_node());
         return Err(Error::invalid(
             "Rust source",
@@ -258,33 +255,6 @@ fn first_error_node(node: Node<'_>) -> Node<'_> {
     node
 }
 
-fn has_non_macro_error(node: Node<'_>, inside_macro: bool) -> bool {
-    if (node.is_error() || node.is_missing()) && !inside_macro {
-        return true;
-    }
-    let inside_macro = inside_macro || node.kind() == "macro_rule";
-    let mut cursor = node.walk();
-    node.children(&mut cursor)
-        .any(|child| has_non_macro_error(child, inside_macro))
-}
-
-fn has_macro_syntax(node: Node<'_>) -> bool {
-    if matches!(node.kind(), "macro_rule" | "macro_invocation") {
-        return true;
-    }
-    let mut cursor = node.walk();
-    node.children(&mut cursor).any(has_macro_syntax)
-}
-
-fn source_has_macro_syntax(source: &str) -> bool {
-    source.lines().any(|line| {
-        line.find('!').is_some_and(|index| {
-            let rest = line[index + 1..].trim_start();
-            rest.starts_with('(') || rest.starts_with('{') || rest.starts_with('[')
-        })
-    })
-}
-
 /// Extracts normalized `allow`, `expect`, and conditional allow attributes.
 pub(crate) fn lint_suppressions(path: &str, source: &str) -> Result<Vec<LintSuppression>> {
     if !is_relative_path(path) {
@@ -294,17 +264,14 @@ pub(crate) fn lint_suppressions(path: &str, source: &str) -> Result<Vec<LintSupp
         ));
     }
     let mut parser = Parser::new();
-    let language = tree_sitter_rust::LANGUAGE.into();
+    let language = tree_sitter_rust_orchard::LANGUAGE.into();
     parser
         .set_language(&language)
         .map_err(|error| Error::invalid("Rust parser", error))?;
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| Error::invalid("Rust parser", "did not produce a syntax tree"))?;
-    if has_non_macro_error(tree.root_node(), false)
-        && !has_macro_syntax(tree.root_node())
-        && !source_has_macro_syntax(source)
-    {
+    if tree.root_node().has_error() {
         return Err(Error::invalid("Rust source", "contains syntax errors"));
     }
     let mut result = Vec::new();
@@ -324,17 +291,14 @@ pub(crate) fn unsafe_surface(path: &str, source: &str) -> Result<Vec<UnsafeSurfa
         ));
     }
     let mut parser = Parser::new();
-    let language = tree_sitter_rust::LANGUAGE.into();
+    let language = tree_sitter_rust_orchard::LANGUAGE.into();
     parser
         .set_language(&language)
         .map_err(|error| Error::invalid("Rust parser", error))?;
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| Error::invalid("Rust parser", "did not produce a syntax tree"))?;
-    if has_non_macro_error(tree.root_node(), false)
-        && !has_macro_syntax(tree.root_node())
-        && !source_has_macro_syntax(source)
-    {
+    if tree.root_node().has_error() {
         return Err(Error::invalid("Rust source", "contains syntax errors"));
     }
     let mut result = Vec::new();
@@ -575,7 +539,10 @@ fn normalized_tokens(node: Node<'_>, source: &str, is_root: bool) -> Result<Vec<
     if !is_root && node.kind() == "function_item" {
         return Ok(Vec::new());
     }
-    if node.kind() == "line_comment" || node.kind() == "block_comment" {
+    if matches!(
+        node.kind(),
+        "line_comment" | "block_comment" | "attributes" | "attribute_item" | "inner_attribute_item"
+    ) {
         return Ok(Vec::new());
     }
     if node.child_count() == 0 {
@@ -595,7 +562,7 @@ fn normalized_ast(node: Node<'_>, source: &str, is_root: bool) -> Result<Vec<Str
     }
     if matches!(
         node.kind(),
-        "line_comment" | "block_comment" | "attribute_item" | "inner_attribute_item"
+        "line_comment" | "block_comment" | "attributes" | "attribute_item" | "inner_attribute_item"
     ) {
         return Ok(Vec::new());
     }
@@ -797,7 +764,7 @@ mod parser {
     }
 
     #[test]
-    fn accepts_tree_sitter_errors_inside_macro_definitions() {
+    fn orchard_parses_tilde_macro_patterns_without_errors() {
         let source = r#"
 macro_rules! parser {
     (0 (~$($fuel:tt)*) $rest:tt) => { $rest };
@@ -805,6 +772,11 @@ macro_rules! parser {
 
 fn stable() {}
 "#;
+        let mut parser = tree_sitter::Parser::new();
+        let language = tree_sitter_rust_orchard::LANGUAGE.into();
+        parser.set_language(&language).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        assert!(!tree.root_node().has_error());
         let file = analyze_rust_file("src/macros.rs", source).unwrap();
         assert_eq!(file.functions.len(), 1);
     }
