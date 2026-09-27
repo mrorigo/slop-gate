@@ -569,13 +569,7 @@ fn record_function(
 }
 
 fn normalized_tokens(node: Node<'_>, source: &str, is_root: bool) -> Result<Vec<NormalizedToken>> {
-    if !is_root && node.kind() == "function_item" {
-        return Ok(Vec::new());
-    }
-    if matches!(
-        node.kind(),
-        "line_comment" | "block_comment" | "attributes" | "attribute_item" | "inner_attribute_item"
-    ) {
+    if is_omitted(node, is_root) {
         return Ok(Vec::new());
     }
     if node.child_count() == 0 {
@@ -592,6 +586,32 @@ fn normalized_tokens(node: Node<'_>, source: &str, is_root: bool) -> Result<Vec<
     Ok(tokens)
 }
 
+/// Returns whether a node contributes nothing to a normalized stream.
+///
+/// Nested functions are analyzed on their own, and comments and attributes are
+/// not part of the structural signal. Both normalized streams omit exactly the
+/// same nodes, so the decision is shared rather than repeated per stream.
+///
+/// # Arguments
+///
+/// * `node` - Node under consideration.
+/// * `is_root` - Whether the node is the declaration being analyzed.
+///
+/// # Returns
+///
+/// Returns `true` when the node must be skipped.
+fn is_omitted(node: Node<'_>, is_root: bool) -> bool {
+    (!is_root && node.kind() == "function_item")
+        || matches!(
+            node.kind(),
+            "line_comment"
+                | "block_comment"
+                | "attributes"
+                | "attribute_item"
+                | "inner_attribute_item"
+        )
+}
+
 /// One normalized token with the source line that produced it.
 struct NormalizedToken {
     text: String,
@@ -599,13 +619,7 @@ struct NormalizedToken {
 }
 
 fn normalized_ast(node: Node<'_>, source: &str, is_root: bool) -> Result<Vec<NormalizedToken>> {
-    if !is_root && node.kind() == "function_item" {
-        return Ok(Vec::new());
-    }
-    if matches!(
-        node.kind(),
-        "line_comment" | "block_comment" | "attributes" | "attribute_item" | "inner_attribute_item"
-    ) {
+    if is_omitted(node, is_root) {
         return Ok(Vec::new());
     }
     if node.child_count() == 0 {
