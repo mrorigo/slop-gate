@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use tree_sitter::{Node, Parser};
+use tree_sitter::{Node, Parser, Tree};
 
 use crate::error::{Error, Result};
 use crate::path::is_relative_path;
@@ -213,6 +213,37 @@ pub fn analyze_rust_file(path: &str, source: &str) -> Result<AnalyzedFile> {
             format!("{path:?}"),
         ));
     }
+    let tree = parse_rust(source)?;
+
+    let mut functions = Vec::new();
+    collect_functions(tree.root_node(), source, path, &[], &mut functions)?;
+    Ok(AnalyzedFile {
+        path: path.to_string(),
+        language: LANGUAGE.to_string(),
+        content_hash: blake3::hash(source.as_bytes()).to_hex().to_string(),
+        functions,
+    })
+}
+
+/// Parses Rust source with the supported grammar, rejecting syntax errors.
+///
+/// Every analysis entry point needs the same grammar, the same parse, and the
+/// same refusal to guess at broken source, so the setup is shared rather than
+/// repeated per entry point.
+///
+/// # Arguments
+///
+/// * `source` - Complete Rust source text.
+///
+/// # Returns
+///
+/// Returns the parsed syntax tree.
+///
+/// # Errors
+///
+/// Returns an error when the grammar cannot be loaded, the parser produces no
+/// tree, or the source contains syntax errors.
+fn parse_rust(source: &str) -> Result<Tree> {
     let mut parser = Parser::new();
     let language = tree_sitter_rust_orchard::LANGUAGE.into();
     parser
@@ -233,15 +264,7 @@ pub fn analyze_rust_file(path: &str, source: &str) -> Result<AnalyzedFile> {
             ),
         ));
     }
-
-    let mut functions = Vec::new();
-    collect_functions(tree.root_node(), source, path, &[], &mut functions)?;
-    Ok(AnalyzedFile {
-        path: path.to_string(),
-        language: LANGUAGE.to_string(),
-        content_hash: blake3::hash(source.as_bytes()).to_hex().to_string(),
-        functions,
-    })
+    Ok(tree)
 }
 
 fn first_error_node(node: Node<'_>) -> Node<'_> {
@@ -265,17 +288,7 @@ pub(crate) fn lint_suppressions(path: &str, source: &str) -> Result<Vec<LintSupp
             format!("{path:?}"),
         ));
     }
-    let mut parser = Parser::new();
-    let language = tree_sitter_rust_orchard::LANGUAGE.into();
-    parser
-        .set_language(&language)
-        .map_err(|error| Error::invalid("Rust parser", error))?;
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| Error::invalid("Rust parser", "did not produce a syntax tree"))?;
-    if tree.root_node().has_error() {
-        return Err(Error::invalid("Rust source", "contains syntax errors"));
-    }
+    let tree = parse_rust(source)?;
     let mut result = Vec::new();
     collect_lint_suppressions(tree.root_node(), source, &mut result)?;
     result.sort_by(|left, right| {
@@ -292,17 +305,7 @@ pub(crate) fn unsafe_surface(path: &str, source: &str) -> Result<Vec<UnsafeSurfa
             format!("{path:?}"),
         ));
     }
-    let mut parser = Parser::new();
-    let language = tree_sitter_rust_orchard::LANGUAGE.into();
-    parser
-        .set_language(&language)
-        .map_err(|error| Error::invalid("Rust parser", error))?;
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| Error::invalid("Rust parser", "did not produce a syntax tree"))?;
-    if tree.root_node().has_error() {
-        return Err(Error::invalid("Rust source", "contains syntax errors"));
-    }
+    let tree = parse_rust(source)?;
     let mut result = Vec::new();
     collect_unsafe_surface(tree.root_node(), source, &mut result)?;
     result.sort_by_key(|fact| (fact.line, fact.pattern_id.clone()));
