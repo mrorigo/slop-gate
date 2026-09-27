@@ -17,6 +17,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Ancestry cannot be tested against a shallow history.
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -32,6 +35,26 @@ jobs:
             echo "tag v$tag_version does not match Cargo package version $package_version" >&2
             exit 1
           fi
+
+      - name: Require tag to be reachable from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --quiet --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
+            missing="$(git rev-list --count FETCH_HEAD.."$GITHUB_SHA" || echo '?')"
+            extra="$(git rev-list --count "$GITHUB_SHA"..FETCH_HEAD || echo '?')"
+            echo "tag ${GITHUB_REF_NAME} is not reachable from origin/main" >&2
+            echo "the tagged commit has $missing commit(s) that main does not contain" >&2
+            if [ "$extra" != "0" ]; then
+              echo "and main has diverged, with $extra commit(s) the tag does not contain" >&2
+            fi
+            echo "a release tag that main does not contain leaves main and the published" >&2
+            echo "release disagreeing, and every pull request then carries the tagged" >&2
+            echo "commit in its diff. Push the tagged commit to main, then retag." >&2
+            exit 1
+          fi
+          echo "${GITHUB_REF_NAME} is reachable from origin/main"
 
   build:
     name: Build (${{ matrix.target }})
