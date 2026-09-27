@@ -1,13 +1,13 @@
 // Rust guideline compliant 2026-09-12
 //! Baseline artifact construction and function-mass gate evaluation.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde::Serialize;
 
 use crate::analysis::{
-    FunctionIdentity, FunctionRecord, IndexArtifact, RepositorySummary, analyze_rust_file,
-    analyzer_fingerprint, analyzer_fingerprint_with_policy,
+    FunctionIdentity, FunctionRecord, FunctionRole, IndexArtifact, RepositorySummary, SHINGLE_SIZE,
+    analyze_rust_file, analyzer_fingerprint, analyzer_fingerprint_with_policy,
 };
 use crate::analysis::{dependency_edges, lint_suppressions, unsafe_surface};
 use crate::config::{GateConfig, NearCloneRule, RuleSeverity};
@@ -299,21 +299,40 @@ pub(crate) fn check_mass(
                     config,
                 );
             }
-            if materially_changed
-                && let Some((candidate, token_similarity, ast_similarity)) =
-                    clone_index.best_match(function, &config.rules.near_clone)
-            {
-                push_if_enabled(
-                    &mut report,
-                    clone_finding(
-                        function,
-                        &candidate,
-                        token_similarity,
-                        ast_similarity,
-                        config.rules.near_clone.similarity_threshold,
-                    ),
-                    config,
-                );
+            if materially_changed {
+                let whole = clone_index
+                    .best_match(function, &config.rules.near_clone)
+                    .map(|(candidate, token_similarity, ast_similarity)| {
+                        (
+                            clone_finding(
+                                function,
+                                &candidate,
+                                token_similarity,
+                                ast_similarity,
+                                config.rules.near_clone.similarity_threshold,
+                            ),
+                            candidate.identity,
+                        )
+                    });
+                if let Some((finding, _)) = &whole {
+                    push_if_enabled(&mut report, finding.clone(), config);
+                }
+                if config.rules.near_clone.detect_blocks {
+                    for block in clone_index.best_block_matches(function, &config.rules.near_clone)
+                    {
+                        if whole
+                            .as_ref()
+                            .is_some_and(|(_, identity)| *identity == block.candidate.identity)
+                        {
+                            continue;
+                        }
+                        push_if_enabled(
+                            &mut report,
+                            block_clone_finding(function, &block, &config.rules.near_clone),
+                            config,
+                        );
+                    }
+                }
             }
             clone_index.insert(function.clone());
         }
@@ -349,7 +368,36 @@ pub(crate) fn check_mass(
         let base_summary =
             RepositorySummary::from_files_with_cutoff(&artifact.files, policy.complexity_cutoff);
         let delta = head_summary.erosion_ratio - base_summary.erosion_ratio;
-        if head_summary.erosion_ratio > policy.erosion_limit || delta > policy.delta_limit {
+        // The ratio alone cannot separate "added complexity" from "deleted
+        // easy code": removing low-complexity code shrinks the denominator and
+        // raises the ratio. Growth of the absolute high-complexity mass is
+        // immune to that and is compared alongside the ratio.
+        let mass_growth = mass_growth(
+            base_summary.high_complexity_mass,
+            head_summary.high_complexity_mass,
+        );
+        let breaches = erosion_breaches(
+            &head_summary,
+            delta,
+            mass_growth,
+            policy.erosion_limit,
+            policy.delta_limit,
+            policy.mass_growth_limit,
+        );
+        if !breaches.is_empty() {
+            let by_cutoff = CUTOFF_DISTRIBUTION
+                .iter()
+                .map(|cutoff| {
+                    (
+                        cutoff.to_string(),
+                        format!(
+                            "{:.6}",
+                            RepositorySummary::from_files_with_cutoff(&head_files, *cutoff)
+                                .erosion_ratio
+                        ),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
             push_if_enabled(
                 &mut report,
                 erosion_finding(ErosionFindingInput {
@@ -360,8 +408,12 @@ pub(crate) fn check_mass(
                     head: &head_summary,
                     base: &base_summary,
                     delta,
+                    mass_growth,
+                    breaches,
+                    erosion_by_cutoff: by_cutoff,
                     erosion_limit: policy.erosion_limit,
                     delta_limit: policy.delta_limit,
+                    mass_growth_limit: policy.mass_growth_limit,
                     complexity_cutoff: policy.complexity_cutoff,
                     top_contributors: policy.top_contributors,
                 }),
@@ -457,6 +509,29 @@ fn delta_finding(
     }
 }
 
+/// Returns the duplication risk of a pair of functions.
+///
+/// Risk is steepest for production code that is structurally unrelated to
+/// boilerplate, and lowest for test or accessor duplication.
+///
+/// # Arguments
+///
+/// * `left` - Function at the reported location.
+/// * `right` - Matched candidate.
+///
+/// # Returns
+///
+/// Returns `high`, `medium`, or `low`.
+fn clone_risk(left: &FunctionRecord, right: &FunctionRecord) -> &'static str {
+    if left.role.is_low_risk() || right.role.is_low_risk() {
+        return "low";
+    }
+    if left.role == FunctionRole::General && right.role == FunctionRole::General {
+        return "high";
+    }
+    "medium"
+}
+
 fn clone_finding(
     head: &FunctionRecord,
     candidate: &FunctionRecord,
@@ -471,14 +546,21 @@ fn clone_finding(
         format!("{token_similarity:.6}"),
     );
     properties.insert("ast_similarity".to_string(), format!("{ast_similarity:.6}"));
+    let (risk, same_file) = duplication_context(head, candidate);
+    properties.insert("clone_scope".to_string(), "whole-function".to_string());
+    properties.insert("clone_risk".to_string(), risk.to_string());
+    properties.insert("left_role".to_string(), head.role.name().to_string());
+    properties.insert("right_role".to_string(), candidate.role.name().to_string());
+    properties.insert("same_file".to_string(), same_file.to_string());
     Finding {
         rule_id: "near-clone".to_string(),
         severity: Severity::Error,
         message: format!(
-            "structural similarity {:.2}% to {} exceeds threshold {:.2}%",
+            "whole-function structural similarity {:.2}% to {} exceeds threshold {:.2}% [{}]",
             similarity * 100.0,
             candidate.identity.qualified_name,
-            threshold * 100.0
+            threshold * 100.0,
+            risk
         ),
         location: Location {
             path: head.identity.path.clone(),
@@ -497,6 +579,159 @@ fn clone_finding(
     }
 }
 
+/// Builds the finding for a duplicated block inside two large functions.
+///
+/// # Arguments
+///
+/// * `head` - Function containing the first island.
+/// * `match_facts` - Located block and its candidate.
+/// * `policy` - Near-clone thresholds.
+///
+/// # Returns
+///
+/// Returns a `near-clone` finding that points at both islands.
+fn block_clone_finding(
+    head: &FunctionRecord,
+    match_facts: &BlockMatch,
+    policy: &NearCloneRule,
+) -> Finding {
+    let candidate = &match_facts.candidate;
+    let similarity = match_facts.similarity();
+    let (risk, same_file) = duplication_context(head, candidate);
+    let mut properties = BTreeMap::new();
+    properties.insert("clone_scope".to_string(), "block".to_string());
+    properties.insert("clone_risk".to_string(), risk.to_string());
+    properties.insert(
+        "token_containment".to_string(),
+        format!("{:.6}", match_facts.token_containment),
+    );
+    properties.insert(
+        "ast_containment".to_string(),
+        format!("{:.6}", match_facts.ast_containment),
+    );
+    properties.insert(
+        "island_shingles".to_string(),
+        match_facts.island_shingles.to_string(),
+    );
+    properties.insert(
+        "island_lines".to_string(),
+        (match_facts.left_end_line - match_facts.left_start_line + 1).to_string(),
+    );
+    properties.insert("left_role".to_string(), head.role.name().to_string());
+    properties.insert("right_role".to_string(), candidate.role.name().to_string());
+    properties.insert("same_file".to_string(), same_file.to_string());
+    properties.insert(
+        "left_start_line".to_string(),
+        match_facts.left_start_line.to_string(),
+    );
+    properties.insert(
+        "right_start_line".to_string(),
+        match_facts.right_start_line.to_string(),
+    );
+    Finding {
+        rule_id: "near-clone".to_string(),
+        severity: Severity::Error,
+        message: format!(
+            "block of ~{} statements duplicated at {}:{} [{}]",
+            match_facts.left_end_line - match_facts.left_start_line + 1,
+            candidate.identity.path,
+            match_facts.right_start_line,
+            risk
+        ),
+        location: Location {
+            path: head.identity.path.clone(),
+            line: match_facts.left_start_line,
+        },
+        base_location: Some(Location {
+            path: candidate.identity.path.clone(),
+            line: match_facts.right_start_line,
+        }),
+        base_mass: None,
+        head_mass: None,
+        delta: None,
+        threshold: Some(policy.similarity_threshold),
+        similarity: Some(similarity),
+        properties,
+    }
+}
+
+/// Returns the risk label and file relationship for a clone pair.
+///
+/// # Arguments
+///
+/// * `left` - Function at the reported location.
+/// * `right` - Matched candidate.
+///
+/// # Returns
+///
+/// Returns the risk label and whether both functions share one file.
+fn duplication_context(left: &FunctionRecord, right: &FunctionRecord) -> (&'static str, bool) {
+    (
+        clone_risk(left, right),
+        left.identity.path == right.identity.path,
+    )
+}
+
+/// Complexity cutoffs reported with every structural-erosion finding.
+///
+/// A single ratio is not interpretable across repositories: one panel median
+/// reads 0.41 and another p95 reads 0.81. The distribution shows whether a
+/// repository sits high at every cutoff or only at the configured one.
+const CUTOFF_DISTRIBUTION: [u32; 5] = [5, 10, 15, 20, 30];
+
+/// Returns growth of absolute high-complexity mass between two revisions.
+///
+/// # Arguments
+///
+/// * `base` - High-complexity mass at the base revision.
+/// * `head` - High-complexity mass at the head revision.
+///
+/// # Returns
+///
+/// Returns relative growth, or zero when both revisions hold no
+/// high-complexity mass.
+fn mass_growth(base: f64, head: f64) -> f64 {
+    if base == 0.0 {
+        return f64::from(head > 0.0);
+    }
+    (head - base) / base
+}
+
+/// Returns the erosion conditions a revision breaches.
+///
+/// # Arguments
+///
+/// * `head` - Head summary.
+/// * `delta` - Change in erosion ratio.
+/// * `mass_growth` - Relative growth of high-complexity mass.
+/// * `erosion_limit` - Maximum tolerated erosion ratio.
+/// * `delta_limit` - Maximum tolerated erosion ratio change.
+/// * `mass_growth_limit` - Maximum tolerated high-complexity mass growth.
+///
+/// # Returns
+///
+/// Returns the breached condition identifiers in a stable order.
+fn erosion_breaches(
+    head: &RepositorySummary,
+    delta: f64,
+    mass_growth: f64,
+    erosion_limit: f64,
+    delta_limit: f64,
+    mass_growth_limit: f64,
+) -> Vec<&'static str> {
+    let mut breaches = Vec::new();
+    if mass_growth > mass_growth_limit {
+        breaches.push("mass-growth");
+    }
+    if delta > delta_limit {
+        breaches.push("ratio-delta");
+    }
+    if head.erosion_ratio > erosion_limit {
+        breaches.push("ratio-level");
+    }
+    breaches
+}
+
 struct ErosionFindingInput<'a> {
     head_files: &'a [crate::analysis::AnalyzedFile],
     base_functions: &'a HashMap<FunctionIdentity, &'a FunctionRecord>,
@@ -505,8 +740,12 @@ struct ErosionFindingInput<'a> {
     head: &'a RepositorySummary,
     base: &'a RepositorySummary,
     delta: f64,
+    mass_growth: f64,
+    breaches: Vec<&'static str>,
+    erosion_by_cutoff: BTreeMap<String, String>,
     erosion_limit: f64,
     delta_limit: f64,
+    mass_growth_limit: f64,
     complexity_cutoff: u32,
     top_contributors: usize,
 }
@@ -520,8 +759,12 @@ fn erosion_finding(input: ErosionFindingInput<'_>) -> Finding {
         head,
         base,
         delta,
+        mass_growth,
+        breaches,
+        erosion_by_cutoff,
         erosion_limit,
         delta_limit,
+        mass_growth_limit,
         complexity_cutoff,
         top_contributors,
     } = input;
@@ -564,6 +807,16 @@ fn erosion_finding(input: ErosionFindingInput<'_>) -> Finding {
             path: function.identity.path.clone(),
             line: function.start_line,
         })
+        // A ratio or mass breach can be caused entirely by unchanged code, in
+        // which case there is no changed function to attribute. Fall back to the
+        // largest high-complexity function in the head revision so the finding
+        // still points at real source.
+        .or_else(|| {
+            head.top_contributors.first().map(|contributor| Location {
+                path: contributor.path.clone(),
+                line: contributor.line,
+            })
+        })
         .unwrap_or_else(|| Location {
             path: "<repository>".to_string(),
             line: 1,
@@ -578,6 +831,26 @@ fn erosion_finding(input: ErosionFindingInput<'_>) -> Finding {
         format!("{:.6}", head.erosion_ratio),
     );
     properties.insert("erosion_delta".to_string(), format!("{delta:.6}"));
+    properties.insert(
+        "base_high_complexity_mass".to_string(),
+        format!("{:.6}", base.high_complexity_mass),
+    );
+    properties.insert(
+        "head_high_complexity_mass".to_string(),
+        format!("{:.6}", head.high_complexity_mass),
+    );
+    properties.insert(
+        "high_complexity_mass_growth".to_string(),
+        format!("{mass_growth:.6}"),
+    );
+    properties.insert(
+        "mass_growth_limit".to_string(),
+        format!("{mass_growth_limit:.6}"),
+    );
+    properties.insert("breaches".to_string(), breaches.join(","));
+    for (cutoff, ratio) in &erosion_by_cutoff {
+        properties.insert(format!("erosion_at_cc_{cutoff}"), ratio.clone());
+    }
     properties.insert(
         "complexity_cutoff".to_string(),
         complexity_cutoff.to_string(),
@@ -606,10 +879,13 @@ fn erosion_finding(input: ErosionFindingInput<'_>) -> Finding {
         rule_id: "structural-erosion".to_string(),
         severity: Severity::Error,
         message: format!(
-            "structural erosion increased to {:.2}% (base {:.2}%, delta {:.2}%)",
+            "structural erosion at {:.2}% (base {:.2}%, ratio delta {:+.2}%, high-complexity mass {:+.2}% at CC>{}) [{}]",
             head.erosion_ratio * 100.0,
             base.erosion_ratio * 100.0,
-            delta * 100.0
+            delta * 100.0,
+            mass_growth * 100.0,
+            complexity_cutoff,
+            breaches.join(",")
         ),
         location,
         base_location: None,
@@ -864,9 +1140,10 @@ pub(crate) fn scan_clones(artifact: &IndexArtifact, config: &GateConfig) -> Chec
     let matches = collect_scan_matches(artifact, config);
     let records = function_records(artifact);
     let families = clone_families(&matches, &records);
+    let block_members = block_members(&matches);
     let mut report = CheckReport::default();
     add_pair_findings(&mut report, matches, &families, config);
-    add_family_summaries(&mut report, &families, config);
+    add_family_summaries(&mut report, &families, &block_members, config);
     report.findings.sort_by(finding_order);
     report
 }
@@ -878,17 +1155,36 @@ fn collect_scan_matches(
     let mut index = CloneIndex::default();
     let mut matches = Vec::new();
     for function in artifact.files.iter().flat_map(|file| file.functions.iter()) {
-        if let Some((candidate, token_similarity, ast_similarity)) =
-            index.best_match(function, &config.rules.near_clone)
-        {
-            let finding = clone_finding(
-                function,
-                &candidate,
-                token_similarity,
-                ast_similarity,
-                config.rules.near_clone.similarity_threshold,
-            );
-            matches.push((finding, function.identity.clone(), candidate.identity));
+        let whole = index.best_match(function, &config.rules.near_clone).map(
+            |(candidate, token_similarity, ast_similarity)| {
+                (
+                    clone_finding(
+                        function,
+                        &candidate,
+                        token_similarity,
+                        ast_similarity,
+                        config.rules.near_clone.similarity_threshold,
+                    ),
+                    candidate.identity,
+                )
+            },
+        );
+        if let Some((finding, identity)) = &whole {
+            matches.push((finding.clone(), function.identity.clone(), identity.clone()));
+        }
+        if config.rules.near_clone.detect_blocks {
+            for block in index.best_block_matches(function, &config.rules.near_clone) {
+                // A pair already reported as a whole-function clone must not be
+                // reported twice for the block that makes up the same code.
+                if whole
+                    .as_ref()
+                    .is_some_and(|(_, identity)| *identity == block.candidate.identity)
+                {
+                    continue;
+                }
+                let finding = block_clone_finding(function, &block, &config.rules.near_clone);
+                matches.push((finding, function.identity.clone(), block.candidate.identity));
+            }
         }
         index.insert(function.clone());
     }
@@ -920,9 +1216,26 @@ fn add_pair_findings(
     }
 }
 
+/// Returns the functions that took part in at least one block match.
+fn block_members(
+    matches: &[(Finding, FunctionIdentity, FunctionIdentity)],
+) -> HashSet<FunctionIdentity> {
+    matches
+        .iter()
+        .filter(|(finding, _, _)| {
+            finding
+                .properties
+                .get("clone_scope")
+                .is_some_and(|scope| scope == "block")
+        })
+        .flat_map(|(_, left, right)| [left.clone(), right.clone()])
+        .collect()
+}
+
 fn add_family_summaries(
     report: &mut CheckReport,
     families: &HashMap<FunctionIdentity, CloneFamily>,
+    block_members: &HashSet<FunctionIdentity>,
     config: &GateConfig,
 ) {
     let mut emitted_families = HashSet::new();
@@ -935,20 +1248,57 @@ fn add_family_summaries(
         }
         let first = &family.members[0];
         let second = &family.members[1];
+        let risk = family
+            .members
+            .iter()
+            .map(|member| member.role)
+            .filter(|role| !role.is_low_risk())
+            .count();
+        let risk_label = if risk == family.members.len() {
+            "high"
+        } else if risk == 0 {
+            "low"
+        } else {
+            "medium"
+        };
+        let roles = family
+            .members
+            .iter()
+            .map(|member| member.role.name())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(",");
         let mut properties = BTreeMap::new();
         properties.insert("finding_kind".to_string(), "family-summary".to_string());
         properties.insert("clone_family_id".to_string(), family.id.clone());
         properties.insert("member_count".to_string(), family.members.len().to_string());
-        properties.insert("duplicate_mass".to_string(), format!("{:.6}", family.mass));
+        properties.insert("family_mass".to_string(), format!("{:.6}", family.mass));
+        properties.insert(
+            "duplicate_mass".to_string(),
+            format!("{:.6}", family.recoverable()),
+        );
+        properties.insert("clone_risk".to_string(), risk_label.to_string());
+        properties.insert("member_roles".to_string(), roles);
+        properties.insert(
+            "has_block_match".to_string(),
+            family
+                .members
+                .iter()
+                .any(|member| block_members.contains(&member.identity))
+                .to_string(),
+        );
         push_if_enabled(
             report,
             Finding {
                 rule_id: "near-clone".to_string(),
                 severity: Severity::Error,
                 message: format!(
-                    "clone family contains {} functions with {:.2} duplicate mass",
+                    "clone family of {} functions, {:.2} recoverable mass of {:.2} family mass [{}]",
                     family.members.len(),
-                    family.mass
+                    family.recoverable(),
+                    family.mass,
+                    risk_label
                 ),
                 location: Location {
                     path: first.identity.path.clone(),
@@ -1001,6 +1351,23 @@ struct CloneFamily {
     id: String,
     members: Vec<FunctionRecord>,
     mass: f64,
+    recoverable_mass: f64,
+}
+
+impl CloneFamily {
+    /// Returns the mass a refactor could plausibly remove from the family.
+    ///
+    /// The family total counts every member, including the copy that would be
+    /// kept. Only the total minus the largest member is recoverable, so
+    /// reporting the raw total overstates the available win by roughly the size
+    /// of the surviving function.
+    ///
+    /// # Returns
+    ///
+    /// Returns the recoverable mass, never below zero.
+    fn recoverable(&self) -> f64 {
+        self.recoverable_mass
+    }
 }
 
 fn clone_families(
@@ -1043,13 +1410,19 @@ fn clone_families(
                 .iter()
                 .filter_map(|identity| records.get(identity).cloned())
                 .collect::<Vec<_>>();
-            let mass = records.iter().map(|record| record.mass).sum();
+            let mass: f64 = records.iter().map(|record| record.mass).sum();
+            let largest = records
+                .iter()
+                .map(|record| record.mass)
+                .fold(0.0_f64, f64::max);
+            let recoverable_mass = (mass - largest).max(0.0);
             (
                 group,
                 CloneFamily {
                     id,
                     members: records,
                     mass,
+                    recoverable_mass,
                 },
             )
         })
@@ -1061,6 +1434,7 @@ fn clone_families(
                         id: family.id.clone(),
                         members: family.members.clone(),
                         mass: family.mass,
+                        recoverable_mass: family.recoverable_mass,
                     },
                 )
             })
@@ -1086,10 +1460,45 @@ fn stable_family_hash(members: &[FunctionIdentity]) -> u64 {
     u64::from_le_bytes(bytes)
 }
 
+/// Maximum candidate positions inspected when locating one island.
+///
+/// The anchor shingle is common in idiomatic code, so the search is bounded and
+/// takes the best of the first few occurrences.
+const ISLAND_SEARCH_LIMIT: usize = 8;
+
+/// One duplicated block of statements found inside a function.
+///
+/// Block detection is function-independent: the same contiguous run of
+/// normalized shingles is located in two different functions even when the
+/// surrounding functions are large and dissimilar.
+#[derive(Debug, Clone, PartialEq)]
+struct BlockMatch {
+    candidate: FunctionRecord,
+    token_containment: f64,
+    ast_containment: f64,
+    island_shingles: usize,
+    left_start_line: usize,
+    left_end_line: usize,
+    right_start_line: usize,
+    right_end_line: usize,
+}
+
+impl BlockMatch {
+    /// Returns the minimum of the token and AST containment scores.
+    ///
+    /// # Returns
+    ///
+    /// Returns the block similarity used for threshold comparison.
+    fn similarity(&self) -> f64 {
+        self.token_containment.min(self.ast_containment)
+    }
+}
+
 #[derive(Debug, Default)]
 struct CloneIndex {
     candidates: Vec<FunctionRecord>,
-    by_shingle: HashMap<u64, Vec<usize>>,
+    by_shingle: HashMap<u32, Vec<usize>>,
+    identities: HashSet<FunctionIdentity>,
 }
 
 impl CloneIndex {
@@ -1101,7 +1510,15 @@ impl CloneIndex {
         index
     }
 
+    /// Adds a function to the index, ignoring an identity already present.
+    ///
+    /// A changed file contributes its head version twice: once when the
+    /// candidate pool is built and once when the head function is evaluated.
+    /// Indexing it twice would report the same duplication against itself.
     fn insert(&mut self, function: FunctionRecord) {
+        if !self.identities.insert(function.identity.clone()) {
+            return;
+        }
         let id = self.candidates.len();
         for hash in &function.shingle_hashes {
             self.by_shingle.entry(*hash).or_default().push(id);
@@ -1115,6 +1532,98 @@ impl CloneIndex {
         policy: &NearCloneRule,
     ) -> Option<(FunctionRecord, f64, f64)> {
         self.matches(function, policy).into_iter().next()
+    }
+
+    /// Returns the duplicated blocks this function shares with other functions.
+    ///
+    /// Whole-function similarity dilutes as functions grow, so a byte-identical
+    /// block inside two large functions scores near zero. This comparison is
+    /// function-independent: it looks for the longest contiguous run of
+    /// shingles that also occurs in the candidate, and scores that run against
+    /// the configured minimum run length.
+    ///
+    /// # Arguments
+    ///
+    /// * `function` - Function whose blocks are compared against the index.
+    /// * `policy` - Near-clone thresholds, including the block candidate budget.
+    ///
+    /// # Returns
+    ///
+    /// Returns at most `block_max_families` matches above the similarity
+    /// threshold, ordered by descending similarity.
+    fn best_block_matches(
+        &self,
+        function: &FunctionRecord,
+        policy: &NearCloneRule,
+    ) -> Vec<BlockMatch> {
+        let (Some(min_run), Some(island_floor)) =
+            (block_minimum_run(policy), policy.block_minimum_tokens())
+        else {
+            return Vec::new();
+        };
+        if function.token_count < island_floor.saturating_mul(2) {
+            return Vec::new();
+        }
+        let query_tokens = sorted_unique(&function.token_shingle_sequence);
+        let mut matches = self
+            .candidate_ids(function)
+            .into_iter()
+            .take(policy.block_max_candidates)
+            .filter_map(|id| {
+                let candidate = &self.candidates[id];
+                if candidate.identity == function.identity
+                    || candidate.token_count < island_floor.saturating_mul(2)
+                {
+                    return None;
+                }
+                let token_run = longest_shared_run(
+                    &function.token_shingle_sequence,
+                    &candidate.shingle_hashes,
+                    min_run,
+                )?;
+                let ast_run = longest_shared_run(
+                    &function.ast_shingle_sequence,
+                    &candidate.ast_shingle_hashes,
+                    min_run,
+                )?;
+                let right = locate_shared_island(
+                    &candidate.token_shingle_sequence,
+                    &query_tokens,
+                    function.token_shingle_sequence[token_run.0],
+                    min_run,
+                )?;
+                // The island is only duplicated as far as both sides agree, so
+                // the shorter of the two runs sets the score.
+                let island_shingles = token_run.1.min(right.1);
+                let token_containment = containment(island_shingles, min_run);
+                let ast_containment = containment(ast_run.1.min(island_shingles), min_run);
+                if token_containment < policy.similarity_threshold
+                    || ast_containment < policy.similarity_threshold
+                {
+                    return None;
+                }
+                let right_start = right.0;
+                Some(BlockMatch {
+                    candidate: candidate.clone(),
+                    token_containment,
+                    ast_containment,
+                    island_shingles,
+                    left_start_line: function.token_line_at(token_run.0),
+                    left_end_line: function.token_line_at(token_run.0 + token_run.1 - 1),
+                    right_start_line: candidate.token_line_at(right_start),
+                    right_end_line: candidate.token_line_at(right_start + token_run.1 - 1),
+                })
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by(|left, right| {
+            right
+                .similarity()
+                .total_cmp(&left.similarity())
+                .then_with(|| right.island_shingles.cmp(&left.island_shingles))
+                .then_with(|| candidate_key(&left.candidate).cmp(&candidate_key(&right.candidate)))
+        });
+        matches.truncate(policy.block_max_families);
+        matches
     }
 
     fn matches(
@@ -1190,7 +1699,137 @@ impl CloneIndex {
     }
 }
 
-fn jaccard_similarity(left: &[u64], right: &[u64]) -> f64 {
+/// Returns the shortest shingle run eligible for block comparison.
+///
+/// A run of `n` shingles spans `n + SHINGLE_SIZE - 1` normalized tokens, so the
+/// block token floor converts directly to a run length.
+///
+/// # Arguments
+///
+/// * `policy` - Near-clone thresholds.
+///
+/// # Returns
+///
+/// Returns the minimum run length, or `None` when the policy cannot express one.
+fn block_minimum_run(policy: &NearCloneRule) -> Option<usize> {
+    policy
+        .block_minimum_tokens()?
+        .checked_sub(SHINGLE_SIZE - 1)
+        .filter(|run| *run > 0)
+}
+
+/// Scores a shared run against the minimum run length.
+///
+/// # Arguments
+///
+/// * `run_length` - Length of the contiguous shared shingle run.
+/// * `min_run` - Minimum eligible run length.
+///
+/// # Returns
+///
+/// Returns the run length as a fraction of the minimum, capped at one.
+fn containment(run_length: usize, min_run: usize) -> f64 {
+    (run_length as f64 / min_run as f64).min(1.0)
+}
+
+/// Returns a sorted, deduplicated copy of a shingle sequence.
+///
+/// # Arguments
+///
+/// * `sequence` - Ordered shingle hashes.
+///
+/// # Returns
+///
+/// Returns the unique values in ascending order.
+fn sorted_unique(sequence: &[u32]) -> Vec<u32> {
+    let mut sorted = sequence.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    sorted
+}
+
+/// Returns the longest contiguous run of shingles also present in `other`.
+///
+/// # Arguments
+///
+/// * `sequence` - Ordered shingle hashes of the query function.
+/// * `other` - Sorted unique shingle hashes of the candidate.
+/// * `min_run` - Shortest run that qualifies as a duplicated block.
+///
+/// # Returns
+///
+/// Returns the run start position and run length, or `None` when no run is long
+/// enough.
+fn longest_shared_run(sequence: &[u32], other: &[u32], min_run: usize) -> Option<(usize, usize)> {
+    let mut best: Option<(usize, usize)> = None;
+    let mut start = 0;
+    let mut length = 0;
+    for (index, hash) in sequence.iter().enumerate() {
+        if other.binary_search(hash).is_ok() {
+            if length == 0 {
+                start = index;
+            }
+            length += 1;
+            if length >= min_run && best.is_none_or(|(_, best_length)| length > best_length) {
+                best = Some((start, length));
+            }
+        } else {
+            length = 0;
+        }
+    }
+    best
+}
+
+/// Returns where the candidate holds the same island as the query.
+///
+/// The candidate's copy of the island need not be the same length as the
+/// query's: shingle windows straddle statement boundaries, so the two runs
+/// start at different offsets and can end at different statements. The longest
+/// candidate run anchored at the same shingle is therefore located, and the
+/// caller scores the overlap both sides agree on.
+///
+/// # Arguments
+///
+/// * `candidate_sequence` - Ordered shingle hashes of the candidate.
+/// * `query_set` - Sorted unique shingle hashes of the query function.
+/// * `anchor` - Shingle hash that opens the island in the query.
+/// * `min_run` - Shortest run that qualifies as a duplicated block.
+///
+/// # Returns
+///
+/// Returns the candidate's island start position and run length, or `None` when
+/// no candidate run reaches the minimum.
+fn locate_shared_island(
+    candidate_sequence: &[u32],
+    query_set: &[u32],
+    anchor: u32,
+    min_run: usize,
+) -> Option<(usize, usize)> {
+    let mut best: Option<(usize, usize)> = None;
+    let mut inspected = 0;
+    for (index, hash) in candidate_sequence.iter().enumerate() {
+        if *hash != anchor {
+            continue;
+        }
+        inspected += 1;
+        if inspected > ISLAND_SEARCH_LIMIT {
+            break;
+        }
+        let mut length = 0;
+        while let Some(value) = candidate_sequence.get(index + length) {
+            if query_set.binary_search(value).is_err() {
+                break;
+            }
+            length += 1;
+        }
+        if length >= min_run && best.is_none_or(|(_, best_length)| length > best_length) {
+            best = Some((index, length));
+        }
+    }
+    best
+}
+
+fn jaccard_similarity(left: &[u32], right: &[u32]) -> f64 {
     let mut left_index = 0;
     let mut right_index = 0;
     let mut shared = 0;
@@ -1275,10 +1914,10 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        CloneIndex, Severity, bind_policy, build_artifact, check_mass, limit_scan_report,
-        scan_clones,
+        CheckReport, CloneIndex, Severity, bind_policy, build_artifact, check_mass,
+        limit_scan_report, mass_growth, scan_clones,
     };
-    use crate::analysis::analyze_rust_file;
+    use crate::analysis::{IndexArtifact, analyze_rust_file};
     use crate::config::GateConfig;
     use crate::git::GitRepository;
 
@@ -1364,6 +2003,343 @@ mod tests {
         assert!(!report.has_errors());
     }
 
+    /// Returns a duplicated statement block long enough to clear the block floor.
+    fn shared_island() -> String {
+        let mut island = String::from(
+            "    let count_embed = model.count_embed(&batch);\n    let logits = count_embed.forward(&engine)?;\n    let flat = flatten(&logits, &span_rep, &span_mask)?;\n    let masks = flatten_mask(&span_mask, &spans_idx)?;\n    if flat.is_empty() { return Ok(Vec::new()); }\n",
+        );
+        for index in 0..20 {
+            island.push_str(&format!(
+                "    let projected_{index} = project(&struct_proj, &flat, &masks, offset_{index})?;\n"
+            ));
+        }
+        island
+    }
+
+    /// Returns structurally distinct filler so the enclosing functions stay
+    /// dissimilar as whole functions.
+    fn arithmetic_filler() -> String {
+        (0..40)
+            .map(|index| {
+                format!("    let a{index} = base_{index} * scale_{index} + offset_{index};\n")
+            })
+            .collect()
+    }
+
+    fn dispatch_filler() -> String {
+        (0..40)
+            .map(|index| {
+                format!(
+                    "    match state_{index} {{\n        State::Ready => emit_{index}(sink)?,\n        State::Busy => {{}}\n        _ => {{}}\n    }}\n"
+                )
+            })
+            .collect()
+    }
+
+    fn island_source() -> String {
+        let island = shared_island();
+        format!(
+            "fn extract_relations_from_output() -> Result<Vec<u8>, ()> {{\n{}{island}    let _done = 1;\n    Ok(vec![0])\n}}\n\nfn extract_structures_from_output() -> Result<Vec<u8>, ()> {{\n{}{island}    let _done = 2;\n    Ok(vec![1])\n}}\n",
+            arithmetic_filler(),
+            dispatch_filler()
+        )
+    }
+
+    fn scan_source(source: &str) -> CheckReport {
+        let file = analyze_rust_file("src/inference/engine.rs", source).unwrap();
+        let artifact = IndexArtifact::new("a".repeat(40), vec![file]).unwrap();
+        scan_clones(&artifact, &GateConfig::default())
+    }
+
+    #[test]
+    fn triaged_noise_families_produce_no_block_findings() {
+        // Shapes an adopter triaged by hand: mirrored gather kernels, Kleene-3
+        // conjunction and disjunction, struct-variant constructors, and
+        // parallel table tests. Whole-function reporting of these is expected;
+        // block reporting is not.
+        let fixture = include_str!("../tests/fixtures/noise_families.rs");
+        let report = scan_source(fixture);
+        let blocks = report
+            .findings
+            .iter()
+            .filter(|finding| finding.properties.get("clone_scope") == Some(&"block".to_string()))
+            .collect::<Vec<_>>();
+        assert!(
+            blocks.is_empty(),
+            "triaged noise must not produce block findings: {blocks:?}"
+        );
+    }
+
+    #[test]
+    fn a_changed_file_does_not_report_its_own_head_copy() {
+        // A changed file contributes its head version to the candidate pool and
+        // is evaluated again as a query, so an unguarded index holds two copies
+        // and reports the same island twice.
+        let source = island_source();
+        let (base, _) = source
+            .split_once("fn extract_structures_from_output")
+            .unwrap();
+        let repository = TestRepository::new(base);
+        let git_repo = repository.repository();
+        let mut artifact = build_artifact(&git_repo, "HEAD").unwrap();
+        repository.commit_source(&source);
+        let config = GateConfig::default();
+        bind_policy(&mut artifact, &config).unwrap();
+
+        let report = check_mass(&git_repo, "HEAD~1", "HEAD", &artifact, &config).unwrap();
+        let islands = report
+            .findings
+            .iter()
+            .filter(|finding| finding.properties.get("clone_scope") == Some(&"block".to_string()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            islands.len(),
+            1,
+            "expected one island finding, got {:?}",
+            report
+                .findings
+                .iter()
+                .map(|finding| (finding.rule_id.clone(), finding.message.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn block_duplicate_inside_large_functions_is_reported() {
+        let report = scan_source(&island_source());
+        let block = report
+            .findings
+            .iter()
+            .find(|finding| {
+                finding
+                    .properties
+                    .get("clone_scope")
+                    .is_some_and(|scope| scope == "block")
+            })
+            .expect("block duplicate finding");
+
+        // The whole-function rule cannot see a block inside a large function,
+        // which is the recall gap block detection exists to close.
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.properties.get("clone_scope")
+                    == Some(&"whole-function".to_string()))
+        );
+        assert_eq!(block.properties["clone_risk"], "high");
+        assert_eq!(block.properties["same_file"], "true");
+        assert!(block.similarity.is_some_and(|value| value >= 0.85));
+        assert_eq!(block.rule_id, "near-clone");
+
+        let left = block.properties["left_start_line"]
+            .parse::<usize>()
+            .unwrap();
+        let right = block.properties["right_start_line"]
+            .parse::<usize>()
+            .unwrap();
+        assert!(
+            left > 40 && right > 40,
+            "island must be inside both functions"
+        );
+        assert_eq!(block.location.line, left);
+        assert_eq!(block.base_location.as_ref().unwrap().line, right);
+        // Both islands are inside their functions rather than at a declaration.
+        assert!(
+            right + 20
+                <= scan_source(&island_source())
+                    .findings
+                    .iter()
+                    .filter_map(|finding| finding.base_location.as_ref())
+                    .map(|location| location.line)
+                    .max()
+                    .unwrap_or(0)
+        );
+    }
+
+    #[test]
+    fn repeated_idioms_below_the_block_floor_are_not_reported() {
+        // Constructor boilerplate and one-line accessors are the shape of the
+        // near-clone noise reported by adopters. None of it is an island.
+        let mut source = String::new();
+        for index in 0..8 {
+            source.push_str(&format!(
+                "struct Config{index} {{ alpha: usize, beta: usize, gamma: usize }}\n\nimpl Config{index} {{\n    fn new(alpha: usize, beta: usize, gamma: usize) -> Self {{\n        Self {{ alpha, beta, gamma }}\n    }}\n\n    fn alpha(&self) -> usize {{\n        self.alpha\n    }}\n\n    fn beta(&self) -> usize {{\n        self.beta\n    }}\n\n    fn gamma(&self) -> usize {{\n        self.gamma\n    }}\n}}\n\n"
+            ));
+        }
+        let report = scan_source(&source);
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.properties.get("clone_scope") == Some(&"block".to_string())),
+            "idiomatic repetition must not produce block findings"
+        );
+    }
+
+    /// Returns a field accessor formatted across enough lines to clear the
+    /// whole-function floors.
+    fn accessor(name: &str) -> String {
+        format!(
+            "    fn {name}(&self) -> usize {{\n        self.config\n            .{name}\n            .value\n            .saturating_add(\n                self\n                    .config\n                    .limit,\n            )\n            .saturating_mul(\n                self\n                    .config\n                    .weight,\n            )\n            .saturating_sub(\n                self\n                    .config\n                    .reserved,\n            )\n    }}\n"
+        )
+    }
+
+    fn accessor_source() -> String {
+        let names = ["alpha", "beta", "gamma", "delta"];
+        format!(
+            "struct Holder {{ config: Config }}\n\nstruct Config {{ alpha: usize, beta: usize, gamma: usize, delta: usize, limit: usize, weight: usize, reserved: usize }}\n\nimpl Holder {{\n{}}}\n",
+            names
+                .iter()
+                .map(|name| accessor(name))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    }
+
+    /// Returns a test body large enough to clear the whole-function floors.
+    fn test_case(index: usize) -> String {
+        format!(
+            "fn case_{index}(flag: bool, values: &[usize]) -> usize {{\n    let mut total = 0;\n    for (position, value) in values.iter().enumerate() {{\n        if flag && position % 2 == 0 {{\n            total += value + position;\n        }} else if flag {{\n            total -= value;\n        }} else {{\n            total += position;\n        }}\n    }}\n    if total > 100 {{\n        total /= 2;\n    }} else {{\n        total += 1;\n    }}\n    total\n}}\n"
+        )
+    }
+
+    #[test]
+    fn test_duplication_is_ranked_low_risk() {
+        let source = (0..3).map(test_case).collect::<Vec<_>>().join("\n");
+        let report = scan_source(&format!("mod tests {{\n{source}}}\n"));
+        let pair = report
+            .findings
+            .iter()
+            .find(|finding| finding.properties.contains_key("left_role"))
+            .expect("near-clone pair finding");
+        assert_eq!(
+            pair.properties.get("clone_risk").map(String::as_str),
+            Some("low"),
+            "properties: {:?}",
+            pair.properties
+        );
+        assert_eq!(pair.properties["left_role"], "test");
+    }
+
+    #[test]
+    fn accessor_duplication_is_ranked_low_risk() {
+        let report = scan_source(&accessor_source());
+        let pair = report
+            .findings
+            .iter()
+            .find(|finding| finding.properties.contains_key("left_role"))
+            .expect("near-clone pair finding");
+        assert_eq!(pair.properties["clone_risk"], "low");
+        assert_eq!(pair.properties["left_role"], "accessor");
+    }
+
+    #[test]
+    fn family_summary_reports_recoverable_mass_not_family_mass() {
+        let builder = |name: &str| {
+            format!(
+                "    fn {name}(value: usize) -> Self {{\n        let scaled = value.saturating_mul(2);\n        let shifted = scaled >> 1;\n        Self {{\n            value,\n            scaled,\n            shifted,\n            label: \"alpha\",\n        }}\n    }}\n"
+            )
+        };
+        let source = format!(
+            "struct Alpha {{ value: usize, scaled: usize, shifted: usize, label: &'static str }}\n\nimpl Alpha {{\n{}{}\n}}\n",
+            builder("new"),
+            builder("widened")
+        );
+        let report = scan_source(&source);
+        let summary = report
+            .findings
+            .iter()
+            .find(|finding| finding.properties.contains_key("finding_kind"))
+            .expect("family summary");
+        let family_mass: f64 = summary.properties["family_mass"].parse().unwrap();
+        let duplicate_mass: f64 = summary.properties["duplicate_mass"].parse().unwrap();
+        // Only the smaller copy is removable, so the recoverable mass is half
+        // the family total for a two-member family.
+        assert!(duplicate_mass < family_mass);
+        assert!((duplicate_mass - (family_mass / 2.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn deleting_easy_code_does_not_trip_high_complexity_mass_growth() {
+        // Removing 437 lines of low-complexity code raises the erosion ratio
+        // without adding complexity. The ratio must not be the only signal.
+        let dominant = std::iter::repeat_n("    if flag {}\n", 30).collect::<String>();
+        let easy = (0..40)
+            .map(|index| format!("fn easy_{index}() -> usize {{ {index} }}\n"))
+            .collect::<String>();
+        let repository =
+            TestRepository::new(&format!("fn dominant(flag: bool) {{\n{dominant}}}\n{easy}"));
+        let git_repo = repository.repository();
+        let mut artifact = build_artifact(&git_repo, "HEAD").unwrap();
+        repository.commit_source(&format!("fn dominant(flag: bool) {{\n{dominant}}}\n"));
+        let mut config = GateConfig::default();
+        config.rules.structural_erosion.erosion_limit = 1.0;
+        config.rules.structural_erosion.delta_limit = 1.0;
+        config.rules.structural_erosion.mass_growth_limit = 0.0;
+        bind_policy(&mut artifact, &config).unwrap();
+
+        let report = check_mass(&git_repo, "HEAD~1", "HEAD", &artifact, &config).unwrap();
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.rule_id == "structural-erosion"),
+            "deleting low-complexity code must not read as added complexity"
+        );
+    }
+
+    #[test]
+    fn erosion_finding_reports_mass_growth_and_cutoff_distribution() {
+        let body = std::iter::repeat_n("    if flag {}\n", 30).collect::<String>();
+        let repository = TestRepository::new("fn small() {}\n");
+        let git_repo = repository.repository();
+        let mut artifact = build_artifact(&git_repo, "HEAD").unwrap();
+        repository.commit_source(&format!(
+            "fn dominant(flag: bool) {{\n{body}}}\nfn small() {{}}\n"
+        ));
+        let mut config = GateConfig::default();
+        config.rules.structural_erosion.erosion_limit = 1.0;
+        config.rules.structural_erosion.delta_limit = 1.0;
+        config.rules.structural_erosion.mass_growth_limit = 0.0;
+        bind_policy(&mut artifact, &config).unwrap();
+
+        let report = check_mass(&git_repo, "HEAD~1", "HEAD", &artifact, &config).unwrap();
+        let finding = report
+            .findings
+            .iter()
+            .find(|finding| finding.rule_id == "structural-erosion")
+            .expect("structural-erosion finding");
+        assert_eq!(
+            finding.properties.get("breaches").map(String::as_str),
+            Some("mass-growth")
+        );
+        assert!(
+            finding.properties["head_high_complexity_mass"]
+                .parse::<f64>()
+                .unwrap()
+                > finding.properties["base_high_complexity_mass"]
+                    .parse::<f64>()
+                    .unwrap()
+        );
+        for cutoff in ["5", "10", "15", "20", "30"] {
+            assert!(
+                finding
+                    .properties
+                    .contains_key(&format!("erosion_at_cc_{cutoff}")),
+                "cutoff distribution must include CC>{cutoff}"
+            );
+        }
+    }
+
+    #[test]
+    fn high_complexity_mass_growth_is_scale_free() {
+        assert!((mass_growth(100.0, 150.0) - 0.5).abs() < 1e-9);
+        assert_eq!(mass_growth(0.0, 0.0), 0.0);
+        assert_eq!(mass_growth(0.0, 10.0), 1.0);
+        assert!((mass_growth(100.0, 40.0) + 0.6).abs() < 1e-9);
+    }
+
     #[test]
     fn structural_erosion_attribution_ignores_unchanged_dominant_functions() {
         let body = std::iter::repeat_n("    if flag {}\n", 30).collect::<String>();
@@ -1384,8 +2360,15 @@ mod tests {
             .iter()
             .find(|finding| finding.rule_id == "structural-erosion")
             .expect("structural-erosion finding");
-        assert_eq!(finding.location.path, "<repository>");
+        // The breach is caused by unchanged code, so no changed function is
+        // attributed as a contributor, but the finding still points at the
+        // dominant function in the head revision instead of a placeholder.
+        assert_eq!(finding.location.path, "src/lib.rs");
         assert!(!finding.properties.contains_key("contributor_1_path"));
+        assert_eq!(
+            finding.properties.get("breaches").map(String::as_str),
+            Some("ratio-level")
+        );
     }
 
     #[test]

@@ -94,6 +94,27 @@ pub(crate) struct NearCloneRule {
     pub(crate) similarity_threshold: f64,
     #[serde(default = "default_max_candidates")]
     pub(crate) max_candidates: usize,
+    /// Whether duplicated statement blocks inside large functions are reported.
+    #[serde(default = "default_true")]
+    pub(crate) detect_blocks: bool,
+    /// Candidate budget for block detection, independent of `max_candidates`.
+    ///
+    /// Block detection compares every shingle window of a function, so it needs
+    /// a wider budget than whole-function comparison to preserve recall.
+    #[serde(default = "default_block_max_candidates")]
+    pub(crate) block_max_candidates: usize,
+    /// Maximum duplicated blocks reported per function.
+    #[serde(default = "default_block_max_families")]
+    pub(crate) block_max_families: usize,
+    /// Minimum tokens in a duplicated block, defaulting to three times
+    /// `minimum_tokens`.
+    ///
+    /// Block detection exists for duplication that whole-function comparison
+    /// cannot see, which is duplication substantial enough to be worth
+    /// extracting. Small repeated idioms are already covered by the
+    /// whole-function floor and are not block findings.
+    #[serde(default)]
+    pub(crate) block_minimum_tokens: Option<usize>,
 }
 
 /// Structural erosion policy.
@@ -106,6 +127,9 @@ pub(crate) struct StructuralErosionRule {
     pub(crate) erosion_limit: f64,
     #[serde(default = "default_erosion_delta_limit")]
     pub(crate) delta_limit: f64,
+    /// Limit on growth of absolute high-complexity mass between base and head.
+    #[serde(default = "default_mass_growth_limit")]
+    pub(crate) mass_growth_limit: f64,
     #[serde(default = "default_complexity_cutoff")]
     pub(crate) complexity_cutoff: u32,
     #[serde(default = "default_top_contributors")]
@@ -160,6 +184,10 @@ impl Default for NearCloneRule {
             minimum_tokens: default_minimum_tokens(),
             similarity_threshold: default_similarity_threshold(),
             max_candidates: default_max_candidates(),
+            detect_blocks: default_true(),
+            block_max_candidates: default_block_max_candidates(),
+            block_max_families: default_block_max_families(),
+            block_minimum_tokens: None,
         }
     }
 }
@@ -170,6 +198,7 @@ macro_rules! structural_erosion_defaults {
             severity: RuleSeverity::Warn,
             erosion_limit: default_erosion_limit(),
             delta_limit: default_erosion_delta_limit(),
+            mass_growth_limit: default_mass_growth_limit(),
             complexity_cutoff: default_complexity_cutoff(),
             top_contributors: default_top_contributors(),
         }
@@ -179,6 +208,18 @@ macro_rules! structural_erosion_defaults {
 impl Default for StructuralErosionRule {
     fn default() -> Self {
         structural_erosion_defaults!()
+    }
+}
+
+impl NearCloneRule {
+    /// Returns the minimum tokens a duplicated block must span.
+    ///
+    /// # Returns
+    ///
+    /// Returns the configured override, or three times `minimum_tokens`.
+    pub(crate) fn block_minimum_tokens(&self) -> Option<usize> {
+        self.block_minimum_tokens
+            .or_else(|| self.minimum_tokens.checked_mul(3))
     }
 }
 
@@ -244,11 +285,18 @@ impl GateConfig {
         if !(0.0..=1.0).contains(&clone.similarity_threshold)
             || clone.minimum_sloc == 0
             || clone.minimum_tokens == 0
+            || clone.minimum_tokens <= crate::analysis::SHINGLE_SIZE
             || clone.max_candidates == 0
+            || clone.block_max_candidates == 0
+            || clone.block_max_families == 0
+            || clone
+                .block_minimum_tokens
+                .is_some_and(|tokens| tokens <= crate::analysis::SHINGLE_SIZE)
+            || clone.block_minimum_tokens().is_none()
         {
             return Err(Error::invalid(
                 "near-clone thresholds",
-                "must be positive and similarity must be within 0.0..=1.0",
+                "must be positive, similarity must be within 0.0..=1.0, and minimum_tokens must exceed one shingle window",
             ));
         }
         let erosion = &self.rules.structural_erosion;
@@ -256,6 +304,8 @@ impl GateConfig {
             || !(0.0..=1.0).contains(&erosion.erosion_limit)
             || !erosion.delta_limit.is_finite()
             || erosion.delta_limit < 0.0
+            || !erosion.mass_growth_limit.is_finite()
+            || erosion.mass_growth_limit < 0.0
             || erosion.top_contributors == 0
             || erosion.top_contributors > 10
         {
@@ -308,10 +358,22 @@ fn default_similarity_threshold() -> f64 {
 fn default_max_candidates() -> usize {
     64
 }
+fn default_block_max_candidates() -> usize {
+    256
+}
+fn default_block_max_families() -> usize {
+    3
+}
+fn default_true() -> bool {
+    true
+}
 fn default_erosion_limit() -> f64 {
     0.50
 }
 fn default_erosion_delta_limit() -> f64 {
+    0.08
+}
+fn default_mass_growth_limit() -> f64 {
     0.08
 }
 fn default_complexity_cutoff() -> u32 {
@@ -333,6 +395,10 @@ mod tests {
         assert_eq!(config.rules.lint_suppression.severity, RuleSeverity::Warn);
         assert_eq!(config.rules.structural_erosion.erosion_limit, 0.50);
         assert_eq!(config.rules.structural_erosion.delta_limit, 0.08);
+        assert_eq!(config.rules.structural_erosion.mass_growth_limit, 0.08);
+        assert!(config.rules.near_clone.detect_blocks);
+        assert_eq!(config.rules.near_clone.block_max_candidates, 256);
+        assert_eq!(config.rules.near_clone.block_max_families, 3);
         assert_eq!(config.rules.structural_erosion.complexity_cutoff, 10);
         assert_eq!(config.rules.structural_erosion.top_contributors, 3);
     }

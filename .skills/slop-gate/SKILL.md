@@ -7,7 +7,16 @@ description: Install and run Slop Gate for deterministic Rust code-quality check
 
 Use Slop Gate to detect newly introduced Rust function growth, near-clones,
 lint suppressions, unsafe surface, production/build dependency surface, and
-repository-level structural erosion. Use `history` to inspect erosion across a
+repository-level structural erosion. Near-clone findings are reported at two scopes. `whole-function` compares
+complete functions. `block` is function-independent: it locates the same
+contiguous run of statements inside two different functions, which is how a
+byte-identical block inside two large functions is caught at all. Each finding
+carries `clone_scope`, `clone_risk` (`high`, `medium`, `low`), `left_role` and
+`right_role` (`test`, `accessor`, `constructor`, `general`), and `same_file`.
+Triage `high` before `medium`, and treat `low` as usually acceptable. A
+clone-family summary reports `duplicate_mass` as recoverable mass, which is
+the family total minus its largest member.
+Use `history` to inspect erosion across a
 bounded first-parent commit window.
 History JSON includes deterministic top-contributor paths, qualified names,
 lines, complexity, and mass. `check` attributes erosion findings only to
@@ -153,6 +162,18 @@ minimum_sloc = 8
 minimum_tokens = 40
 similarity_threshold = 0.85
 max_candidates = 64
+detect_blocks = true
+block_max_candidates = 256
+block_max_families = 3
+# block_minimum_tokens = 120
+
+[rules.structural_erosion]
+severity = "warn"
+erosion_limit = 0.50
+delta_limit = 0.08
+mass_growth_limit = 0.08
+complexity_cutoff = 10
+top_contributors = 3
 
 [rules.lint_suppression]
 severity = "warn"
@@ -196,8 +217,12 @@ agent or reinterpret status `2` as a code-quality result.
   evaluating them; do not claim that an uncommitted tree passed.
 - Use `scan --working-tree` for local edits. It includes untracked non-ignored
   Rust files and respects `.gitignore` unless `--no-ignore` is supplied.
-- Use the artifact matching `BASE`; a stale or policy-mismatched artifact must
-  be rebuilt rather than bypassed.
+- Use the artifact matching `BASE`; a stale, policy-mismatched, or
+  tool-version-mismatched artifact must be rebuilt rather than bypassed. The
+  diagnostic names both versions; do not edit the artifact to make it load.
+- Do not lower `block_minimum_tokens` to find more duplication. The default is
+  set where repeated idioms stop dominating the report. Raise it if a
+  repository's block findings are mostly boilerplate.
 - Treat malformed baseline Rust, malformed configuration, malformed manifests,
   missing revisions, and Git failures as operational failures.
 - Changed head Rust syntax errors are reported as advisory `analysis-error`
