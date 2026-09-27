@@ -300,39 +300,7 @@ pub(crate) fn check_mass(
                 );
             }
             if materially_changed {
-                let whole = clone_index
-                    .best_match(function, &config.rules.near_clone)
-                    .map(|(candidate, token_similarity, ast_similarity)| {
-                        (
-                            clone_finding(
-                                function,
-                                &candidate,
-                                token_similarity,
-                                ast_similarity,
-                                config.rules.near_clone.similarity_threshold,
-                            ),
-                            candidate.identity,
-                        )
-                    });
-                if let Some((finding, _)) = &whole {
-                    push_if_enabled(&mut report, finding.clone(), config);
-                }
-                if config.rules.near_clone.detect_blocks {
-                    for block in clone_index.best_block_matches(function, &config.rules.near_clone)
-                    {
-                        if whole
-                            .as_ref()
-                            .is_some_and(|(_, identity)| *identity == block.candidate.identity)
-                        {
-                            continue;
-                        }
-                        push_if_enabled(
-                            &mut report,
-                            block_clone_finding(function, &block, &config.rules.near_clone),
-                            config,
-                        );
-                    }
-                }
+                evaluate_clones(function, &clone_index, config, &mut report);
             }
             clone_index.insert(function.clone());
         }
@@ -444,6 +412,59 @@ pub(crate) fn render_human(report: &CheckReport) -> String {
             )
         })
         .collect()
+}
+
+/// Reports duplication between one changed function and the candidate index.
+///
+/// A pair already reported as a whole-function clone is not reported again for
+/// the block that makes up the same code.
+///
+/// # Arguments
+///
+/// * `function` - Changed function to compare.
+/// * `clone_index` - Candidate pool of functions still present in head.
+/// * `config` - Repository policy.
+/// * `report` - Report receiving the findings.
+fn evaluate_clones(
+    function: &FunctionRecord,
+    clone_index: &CloneIndex,
+    config: &GateConfig,
+    report: &mut CheckReport,
+) {
+    let policy = &config.rules.near_clone;
+    let whole = clone_index.best_match(function, policy).map(
+        |(candidate, token_similarity, ast_similarity)| {
+            (
+                clone_finding(
+                    function,
+                    &candidate,
+                    token_similarity,
+                    ast_similarity,
+                    policy.similarity_threshold,
+                ),
+                candidate.identity,
+            )
+        },
+    );
+    if let Some((finding, _)) = &whole {
+        push_if_enabled(report, finding.clone(), config);
+    }
+    if !policy.detect_blocks {
+        return;
+    }
+    for block in clone_index.best_block_matches(function, policy) {
+        if whole
+            .as_ref()
+            .is_some_and(|(_, identity)| *identity == block.candidate.identity)
+        {
+            continue;
+        }
+        push_if_enabled(
+            report,
+            block_clone_finding(function, &block, policy),
+            config,
+        );
+    }
 }
 
 fn renamed_identity(
@@ -1561,7 +1582,8 @@ impl CloneIndex {
         else {
             return Vec::new();
         };
-        if function.token_count < island_floor.saturating_mul(2) {
+        let floor = island_floor.saturating_mul(2);
+        if function.token_count < floor {
             return Vec::new();
         }
         let query_tokens = sorted_unique(&function.token_shingle_sequence);
@@ -1571,48 +1593,9 @@ impl CloneIndex {
             .take(policy.block_max_candidates)
             .filter_map(|id| {
                 let candidate = &self.candidates[id];
-                if candidate.identity == function.identity
-                    || candidate.token_count < island_floor.saturating_mul(2)
-                {
-                    return None;
-                }
-                let token_run = longest_shared_run(
-                    &function.token_shingle_sequence,
-                    &candidate.shingle_hashes,
-                    min_run,
-                )?;
-                let ast_run = longest_shared_run(
-                    &function.ast_shingle_sequence,
-                    &candidate.ast_shingle_hashes,
-                    min_run,
-                )?;
-                let right = locate_shared_island(
-                    &candidate.token_shingle_sequence,
-                    &query_tokens,
-                    function.token_shingle_sequence[token_run.0],
-                    min_run,
-                )?;
-                // The island is only duplicated as far as both sides agree, so
-                // the shorter of the two runs sets the score.
-                let island_shingles = token_run.1.min(right.1);
-                let token_containment = containment(island_shingles, min_run);
-                let ast_containment = containment(ast_run.1.min(island_shingles), min_run);
-                if token_containment < policy.similarity_threshold
-                    || ast_containment < policy.similarity_threshold
-                {
-                    return None;
-                }
-                let right_start = right.0;
-                Some(BlockMatch {
-                    candidate: candidate.clone(),
-                    token_containment,
-                    ast_containment,
-                    island_shingles,
-                    left_start_line: function.token_line_at(token_run.0),
-                    left_end_line: function.token_line_at(token_run.0 + token_run.1 - 1),
-                    right_start_line: candidate.token_line_at(right_start),
-                    right_end_line: candidate.token_line_at(right_start + token_run.1 - 1),
-                })
+                (candidate.identity != function.identity && candidate.token_count >= floor)
+                    .then(|| score_block_match(function, candidate, &query_tokens, min_run, policy))
+                    .flatten()
             })
             .collect::<Vec<_>>();
         matches.sort_by(|left, right| {
@@ -1697,6 +1680,66 @@ impl CloneIndex {
             && ast_similarity >= policy.similarity_threshold)
             .then(|| (candidate.clone(), token_similarity, ast_similarity))
     }
+}
+
+/// Scores the longest block two functions share.
+///
+/// # Arguments
+///
+/// * `function` - Query function holding the island.
+/// * `candidate` - Candidate function to compare against.
+/// * `query_tokens` - Sorted unique token shingles of the query.
+/// * `min_run` - Shortest run that qualifies as a duplicated block.
+/// * `policy` - Near-clone thresholds.
+///
+/// # Returns
+///
+/// Returns the located island, or `None` when the pair shares no block that
+/// clears the similarity threshold in both streams.
+fn score_block_match(
+    function: &FunctionRecord,
+    candidate: &FunctionRecord,
+    query_tokens: &[u32],
+    min_run: usize,
+    policy: &NearCloneRule,
+) -> Option<BlockMatch> {
+    let token_run = longest_shared_run(
+        &function.token_shingle_sequence,
+        &candidate.shingle_hashes,
+        min_run,
+    )?;
+    let ast_run = longest_shared_run(
+        &function.ast_shingle_sequence,
+        &candidate.ast_shingle_hashes,
+        min_run,
+    )?;
+    let right = locate_shared_island(
+        &candidate.token_shingle_sequence,
+        query_tokens,
+        function.token_shingle_sequence[token_run.0],
+        min_run,
+    )?;
+    // The island is only duplicated as far as both sides agree, so the shorter
+    // of the two runs sets the score.
+    let island_shingles = token_run.1.min(right.1);
+    let token_containment = containment(island_shingles, min_run);
+    let ast_containment = containment(ast_run.1.min(island_shingles), min_run);
+    if token_containment < policy.similarity_threshold
+        || ast_containment < policy.similarity_threshold
+    {
+        return None;
+    }
+    let right_start = right.0;
+    Some(BlockMatch {
+        candidate: candidate.clone(),
+        token_containment,
+        ast_containment,
+        island_shingles,
+        left_start_line: function.token_line_at(token_run.0),
+        left_end_line: function.token_line_at(token_run.0 + token_run.1 - 1),
+        right_start_line: candidate.token_line_at(right_start),
+        right_end_line: candidate.token_line_at(right_start + token_run.1 - 1),
+    })
 }
 
 /// Returns the shortest shingle run eligible for block comparison.

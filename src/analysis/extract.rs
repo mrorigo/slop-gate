@@ -734,55 +734,111 @@ fn classify_role(
     ast: &[NormalizedToken],
     cc: u32,
 ) -> FunctionRole {
-    let in_tests = scopes
+    if is_test_code(name, path, scopes) {
+        return FunctionRole::Test;
+    }
+    if is_accessor(ast, cc) {
+        return FunctionRole::Accessor;
+    }
+    if is_constructor(name, ast, cc) {
+        return FunctionRole::Constructor;
+    }
+    FunctionRole::General
+}
+
+/// Returns whether a declaration belongs to test or test-support code.
+///
+/// # Arguments
+///
+/// * `name` - Unqualified function name.
+/// * `path` - Repository-relative file path.
+/// * `scopes` - Enclosing module, trait, and implementation scopes.
+///
+/// # Returns
+///
+/// Returns `true` when the declaration is test code.
+fn is_test_code(name: &str, path: &str, scopes: &[String]) -> bool {
+    scopes
         .iter()
         .any(|scope| scope == "test" || scope == "tests")
         || path.split('/').any(|segment| segment == "tests")
         || path.ends_with("test.rs")
         || name.ends_with("_test")
-        || name.starts_with("test_");
-    if in_tests {
-        return FunctionRole::Test;
+        || name.starts_with("test_")
+}
+
+/// Returns whether a declaration is a field or element accessor.
+///
+/// # Arguments
+///
+/// * `ast` - Normalized AST stream for the declaration.
+/// * `cc` - Cyclomatic complexity of the declaration.
+///
+/// # Returns
+///
+/// Returns `true` for a field read with no control flow and no bindings, which
+/// is idiomatic to repeat however it is formatted. No length cap applies: a
+/// capped accessor could never be reported, because the whole-function token
+/// floor sits above any useful cap.
+fn is_accessor(ast: &[NormalizedToken], cc: u32) -> bool {
+    if cc > 1 {
+        return false;
     }
-    let nodes = ast
-        .iter()
-        .map(|token| token.text.as_str())
-        .collect::<Vec<_>>();
-    let has_control_flow = nodes.iter().any(|node| {
-        node.starts_with("N:")
-            && matches!(
-                node.trim_start_matches("N:"),
-                "if_expression"
-                    | "match_expression"
-                    | "loop_expression"
-                    | "while_expression"
-                    | "for_expression"
-                    | "let_declaration"
+    let mut reads_field = false;
+    for node in ast {
+        match node.text.as_str() {
+            "N:field_expression" | "N:index_expression" => reads_field = true,
+            node if is_control_flow_node(node) || is_binding_node(node) => return false,
+            _ => {}
+        }
+    }
+    reads_field
+}
+
+/// Returns whether a declaration is a constructor or configuration mapper.
+///
+/// # Arguments
+///
+/// * `name` - Unqualified function name.
+/// * `ast` - Normalized AST stream for the declaration.
+/// * `cc` - Cyclomatic complexity of the declaration.
+///
+/// # Returns
+///
+/// Returns `true` for a low-complexity declaration that builds a value under a
+/// constructor-shaped name.
+fn is_constructor(name: &str, ast: &[NormalizedToken], cc: u32) -> bool {
+    if cc > CONSTRUCTOR_COMPLEXITY_LIMIT {
+        return false;
+    }
+    let named_like_a_constructor = name == "new"
+        || name.starts_with("new_")
+        || name.starts_with("from_")
+        || name.starts_with("with_");
+    named_like_a_constructor
+        || ast.iter().any(|node| {
+            matches!(
+                node.text.as_str(),
+                "N:struct_expression" | "N:tuple_expression"
             )
-    });
-    let reads_field = nodes
-        .iter()
-        .any(|node| matches!(*node, "N:field_expression" | "N:index_expression"));
-    // A field read with no control flow and no bindings is an accessor however
-    // it is formatted, which is the shape adopters reported as unavoidable
-    // duplication. No length cap applies: a capped accessor could never be
-    // reported, because the whole-function token floor is above any useful cap.
-    if !has_control_flow && reads_field && cc <= 1 {
-        return FunctionRole::Accessor;
-    }
-    let builds_value = nodes
-        .iter()
-        .any(|node| matches!(*node, "N:struct_expression" | "N:tuple_expression"));
-    if cc <= CONSTRUCTOR_COMPLEXITY_LIMIT
-        && (builds_value
-            || name == "new"
-            || name.starts_with("new_")
-            || name.starts_with("from_")
-            || name.starts_with("with_"))
-    {
-        return FunctionRole::Constructor;
-    }
-    FunctionRole::General
+        })
+}
+
+/// Returns whether a normalized AST node is a control-flow construct.
+fn is_control_flow_node(node: &str) -> bool {
+    matches!(
+        node,
+        "N:if_expression"
+            | "N:match_expression"
+            | "N:loop_expression"
+            | "N:while_expression"
+            | "N:for_expression"
+    )
+}
+
+/// Returns whether a normalized AST node introduces a local binding.
+fn is_binding_node(node: &str) -> bool {
+    node == "N:let_declaration"
 }
 
 fn physical_sloc(node: Node<'_>, source: &str) -> Result<usize> {

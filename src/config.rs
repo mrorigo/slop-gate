@@ -271,70 +271,121 @@ impl GateConfig {
                 format!("{}; expected {}", self.version, CONFIG_VERSION),
             ));
         }
-        if !self.rules.function_mass.new_function_limit.is_finite()
-            || self.rules.function_mass.new_function_limit < 0.0
-            || !self.rules.function_mass.delta_limit.is_finite()
-            || self.rules.function_mass.delta_limit < 0.0
-        {
-            return Err(Error::invalid(
-                "function-mass limits",
-                "must be finite non-negative numbers",
-            ));
-        }
-        let clone = &self.rules.near_clone;
-        if !(0.0..=1.0).contains(&clone.similarity_threshold)
-            || clone.minimum_sloc == 0
-            || clone.minimum_tokens == 0
-            || clone.minimum_tokens <= crate::analysis::SHINGLE_SIZE
-            || clone.max_candidates == 0
-            || clone.block_max_candidates == 0
-            || clone.block_max_families == 0
-            || clone
-                .block_minimum_tokens
-                .is_some_and(|tokens| tokens <= crate::analysis::SHINGLE_SIZE)
-            || clone.block_minimum_tokens().is_none()
-        {
-            return Err(Error::invalid(
-                "near-clone thresholds",
-                "must be positive, similarity must be within 0.0..=1.0, and minimum_tokens must exceed one shingle window",
-            ));
-        }
-        let erosion = &self.rules.structural_erosion;
-        if !erosion.erosion_limit.is_finite()
-            || !(0.0..=1.0).contains(&erosion.erosion_limit)
-            || !erosion.delta_limit.is_finite()
-            || erosion.delta_limit < 0.0
-            || !erosion.mass_growth_limit.is_finite()
-            || erosion.mass_growth_limit < 0.0
-            || erosion.top_contributors == 0
-            || erosion.top_contributors > 10
-        {
-            return Err(Error::invalid(
-                "structural-erosion thresholds",
-                "limits must be finite, erosion_limit must be within 0.0..=1.0, and top_contributors must be within 1..=10",
-            ));
-        }
-        for suppression in &self.suppressions {
-            if !matches!(
-                suppression.rule.as_str(),
-                "function-mass"
-                    | "near-clone"
-                    | "lint-suppression-growth"
-                    | "unsafe-surface-growth"
-                    | "dependency-surface-growth"
-                    | "structural-erosion"
-            ) || !is_relative_path(&suppression.path)
-                || suppression.reason.trim().is_empty()
-                || suppression.line == Some(0)
-            {
-                return Err(Error::invalid(
-                    "suppression",
-                    "requires a supported rule, relative path, positive optional line, and reason",
-                ));
-            }
-        }
-        Ok(())
+        validate_function_mass(&self.rules.function_mass)?;
+        validate_near_clone(&self.rules.near_clone)?;
+        validate_structural_erosion(&self.rules.structural_erosion)?;
+        validate_suppressions(&self.suppressions)
     }
+}
+
+/// Validates function-mass limits.
+///
+/// # Arguments
+///
+/// * `rule` - Function-mass policy.
+///
+/// # Returns
+///
+/// Returns an error when a limit is negative or not finite.
+fn validate_function_mass(rule: &FunctionMassRule) -> Result<()> {
+    if !rule.new_function_limit.is_finite()
+        || rule.new_function_limit < 0.0
+        || !rule.delta_limit.is_finite()
+        || rule.delta_limit < 0.0
+    {
+        return Err(Error::invalid(
+            "function-mass limits",
+            "must be finite non-negative numbers",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates near-clone thresholds.
+///
+/// # Arguments
+///
+/// * `rule` - Near-clone policy.
+///
+/// # Returns
+///
+/// Returns an error when a threshold is unusable. `minimum_tokens` must exceed
+/// one shingle window, or block detection cannot express a run length.
+fn validate_near_clone(rule: &NearCloneRule) -> Result<()> {
+    if !(0.0..=1.0).contains(&rule.similarity_threshold)
+        || rule.minimum_sloc == 0
+        || rule.minimum_tokens <= crate::analysis::SHINGLE_SIZE
+        || rule.max_candidates == 0
+        || rule.block_max_candidates == 0
+        || rule.block_max_families == 0
+        || rule.block_minimum_tokens().is_none()
+    {
+        return Err(Error::invalid(
+            "near-clone thresholds",
+            "must be positive, similarity must be within 0.0..=1.0, and minimum_tokens must exceed one shingle window",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates structural-erosion limits.
+///
+/// # Arguments
+///
+/// * `rule` - Structural-erosion policy.
+///
+/// # Returns
+///
+/// Returns an error when a limit is out of range.
+fn validate_structural_erosion(rule: &StructuralErosionRule) -> Result<()> {
+    if !rule.erosion_limit.is_finite()
+        || !(0.0..=1.0).contains(&rule.erosion_limit)
+        || !rule.delta_limit.is_finite()
+        || rule.delta_limit < 0.0
+        || !rule.mass_growth_limit.is_finite()
+        || rule.mass_growth_limit < 0.0
+        || rule.top_contributors == 0
+        || rule.top_contributors > 10
+    {
+        return Err(Error::invalid(
+            "structural-erosion thresholds",
+            "limits must be finite, erosion_limit must be within 0.0..=1.0, and top_contributors must be within 1..=10",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates configured suppressions.
+///
+/// # Arguments
+///
+/// * `suppressions` - Declared exceptions.
+///
+/// # Returns
+///
+/// Returns an error when a suppression names an unsupported rule, an absolute
+/// path, a zero line, or no reason.
+fn validate_suppressions(suppressions: &[Suppression]) -> Result<()> {
+    for suppression in suppressions {
+        if !matches!(
+            suppression.rule.as_str(),
+            "function-mass"
+                | "near-clone"
+                | "lint-suppression-growth"
+                | "unsafe-surface-growth"
+                | "dependency-surface-growth"
+                | "structural-erosion"
+        ) || !is_relative_path(&suppression.path)
+            || suppression.reason.trim().is_empty()
+            || suppression.line == Some(0)
+        {
+            return Err(Error::invalid(
+                "suppression",
+                "requires a supported rule, relative path, positive optional line, and reason",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn default_version() -> u32 {

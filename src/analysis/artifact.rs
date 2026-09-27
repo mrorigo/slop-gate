@@ -143,6 +143,54 @@ impl IndexArtifact {
         Ok(artifact)
     }
 
+    /// Validates that this artifact was produced by this tool and analyzer.
+    ///
+    /// # Arguments
+    ///
+    /// * `expected_fingerprint` - Compiled analyzer and repository-policy fingerprint.
+    ///
+    /// # Returns
+    ///
+    /// Returns successfully when schema, tool version, and analyzer match.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming both versions whenever they differ.
+    fn validate_compatibility(&self, expected_fingerprint: &str) -> Result<()> {
+        if self.artifact_version != ARTIFACT_VERSION {
+            return Err(Error::invalid(
+                "artifact version",
+                format!(
+                    "index schema {} is not readable by slop-gate {} (expects schema {}); rebuild the index with `slop-gate index`",
+                    self.artifact_version,
+                    tool_version(),
+                    ARTIFACT_VERSION
+                ),
+            ));
+        }
+        if self.tool_version != tool_version() {
+            return Err(Error::invalid(
+                "artifact tool version",
+                format!(
+                    "index was built by slop-gate {}, this is slop-gate {}; rebuild the index with `slop-gate index`",
+                    self.tool_version,
+                    tool_version()
+                ),
+            ));
+        }
+        if self.analyzer_fingerprint != expected_fingerprint {
+            return Err(Error::invalid(
+                "artifact analyzer fingerprint",
+                format!(
+                    "index was built by slop-gate {} with a different analyzer or policy; this is slop-gate {}; rebuild the index with `slop-gate index`",
+                    self.tool_version,
+                    tool_version()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     /// Rejects an artifact written for a different schema before decoding it.
     ///
     /// Deserializing a foreign artifact surfaces as a field-level decode error
@@ -205,37 +253,7 @@ impl IndexArtifact {
     /// Returns an error when a schema, analyzer, commit, file path, or file
     /// ordering constraint is violated.
     pub fn validate_with_fingerprint(&self, expected_fingerprint: &str) -> Result<()> {
-        if self.artifact_version != ARTIFACT_VERSION {
-            return Err(Error::invalid(
-                "artifact version",
-                format!(
-                    "index schema {} is not readable by slop-gate {} (expects schema {}); rebuild the index with `slop-gate index`",
-                    self.artifact_version,
-                    tool_version(),
-                    ARTIFACT_VERSION
-                ),
-            ));
-        }
-        if self.analyzer_fingerprint != expected_fingerprint {
-            return Err(Error::invalid(
-                "artifact analyzer fingerprint",
-                format!(
-                    "index was built by slop-gate {} with a different analyzer or policy; this is slop-gate {}; rebuild the index with `slop-gate index`",
-                    self.tool_version,
-                    tool_version()
-                ),
-            ));
-        }
-        if self.tool_version != tool_version() {
-            return Err(Error::invalid(
-                "artifact tool version",
-                format!(
-                    "index was built by slop-gate {}, this is slop-gate {}; rebuild the index with `slop-gate index`",
-                    self.tool_version,
-                    tool_version()
-                ),
-            ));
-        }
+        self.validate_compatibility(expected_fingerprint)?;
         if !is_git_object_id(&self.repository_commit) {
             return Err(Error::invalid(
                 "artifact repository_commit",
