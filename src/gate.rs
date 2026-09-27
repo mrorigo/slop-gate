@@ -300,7 +300,10 @@ pub(crate) fn check_mass(
                 );
             }
             if materially_changed {
-                evaluate_clones(function, &clone_index, config, &mut report);
+                for (finding, _) in clone_matches(function, &clone_index, &config.rules.near_clone)
+                {
+                    push_if_enabled(&mut report, finding, config);
+                }
             }
             clone_index.insert(function.clone());
         }
@@ -414,24 +417,27 @@ pub(crate) fn render_human(report: &CheckReport) -> String {
         .collect()
 }
 
-/// Reports duplication between one changed function and the candidate index.
+/// Returns the duplication findings for one function against the candidate pool.
 ///
-/// A pair already reported as a whole-function clone is not reported again for
-/// the block that makes up the same code.
+/// Both whole-function and block matches are returned, with the matched
+/// identity, so a caller can build clone families from the same data it
+/// reports. A pair already reported as a whole-function clone is not reported
+/// again for the block that makes up the same code.
 ///
 /// # Arguments
 ///
-/// * `function` - Changed function to compare.
+/// * `function` - Function to compare against the index.
 /// * `clone_index` - Candidate pool of functions still present in head.
-/// * `config` - Repository policy.
-/// * `report` - Report receiving the findings.
-fn evaluate_clones(
+/// * `policy` - Near-clone policy.
+///
+/// # Returns
+///
+/// Returns each finding with the identity of its match.
+fn clone_matches(
     function: &FunctionRecord,
     clone_index: &CloneIndex,
-    config: &GateConfig,
-    report: &mut CheckReport,
-) {
-    let policy = &config.rules.near_clone;
+    policy: &NearCloneRule,
+) -> Vec<(Finding, FunctionIdentity)> {
     let whole = clone_index.best_match(function, policy).map(
         |(candidate, token_similarity, ast_similarity)| {
             (
@@ -446,25 +452,26 @@ fn evaluate_clones(
             )
         },
     );
-    if let Some((finding, _)) = &whole {
-        push_if_enabled(report, finding.clone(), config);
+    let mut findings = Vec::new();
+    if let Some((finding, identity)) = whole {
+        findings.push((finding, identity));
     }
     if !policy.detect_blocks {
-        return;
+        return findings;
     }
     for block in clone_index.best_block_matches(function, policy) {
-        if whole
-            .as_ref()
-            .is_some_and(|(_, identity)| *identity == block.candidate.identity)
+        if findings
+            .iter()
+            .any(|(_, identity)| *identity == block.candidate.identity)
         {
             continue;
         }
-        push_if_enabled(
-            report,
+        findings.push((
             block_clone_finding(function, &block, policy),
-            config,
-        );
+            block.candidate.identity,
+        ));
     }
+    findings
 }
 
 fn renamed_identity(
@@ -1176,36 +1183,8 @@ fn collect_scan_matches(
     let mut index = CloneIndex::default();
     let mut matches = Vec::new();
     for function in artifact.files.iter().flat_map(|file| file.functions.iter()) {
-        let whole = index.best_match(function, &config.rules.near_clone).map(
-            |(candidate, token_similarity, ast_similarity)| {
-                (
-                    clone_finding(
-                        function,
-                        &candidate,
-                        token_similarity,
-                        ast_similarity,
-                        config.rules.near_clone.similarity_threshold,
-                    ),
-                    candidate.identity,
-                )
-            },
-        );
-        if let Some((finding, identity)) = &whole {
-            matches.push((finding.clone(), function.identity.clone(), identity.clone()));
-        }
-        if config.rules.near_clone.detect_blocks {
-            for block in index.best_block_matches(function, &config.rules.near_clone) {
-                // A pair already reported as a whole-function clone must not be
-                // reported twice for the block that makes up the same code.
-                if whole
-                    .as_ref()
-                    .is_some_and(|(_, identity)| *identity == block.candidate.identity)
-                {
-                    continue;
-                }
-                let finding = block_clone_finding(function, &block, &config.rules.near_clone);
-                matches.push((finding, function.identity.clone(), block.candidate.identity));
-            }
+        for (finding, partner) in clone_matches(function, &index, &config.rules.near_clone) {
+            matches.push((finding, function.identity.clone(), partner));
         }
         index.insert(function.clone());
     }
@@ -1235,6 +1214,47 @@ fn add_pair_findings(
         }
         push_if_enabled(report, finding, config);
     }
+}
+
+/// Returns the duplication risk of a clone family.
+///
+/// # Arguments
+///
+/// * `members` - Functions in the family.
+///
+/// # Returns
+///
+/// Returns `high` when no member is boilerplate, `low` when every member is,
+/// and `medium` otherwise.
+fn family_risk_label(members: &[FunctionRecord]) -> &'static str {
+    let production = members
+        .iter()
+        .filter(|member| !member.role.is_low_risk())
+        .count();
+    match production {
+        0 => "low",
+        count if count == members.len() => "high",
+        _ => "medium",
+    }
+}
+
+/// Returns the distinct roles present in a clone family.
+///
+/// # Arguments
+///
+/// * `members` - Functions in the family.
+///
+/// # Returns
+///
+/// Returns the role names in a stable, comma-separated order.
+fn family_roles(members: &[FunctionRecord]) -> String {
+    members
+        .iter()
+        .map(|member| member.role.name())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Returns the functions that took part in at least one block match.
@@ -1269,27 +1289,8 @@ fn add_family_summaries(
         }
         let first = &family.members[0];
         let second = &family.members[1];
-        let risk = family
-            .members
-            .iter()
-            .map(|member| member.role)
-            .filter(|role| !role.is_low_risk())
-            .count();
-        let risk_label = if risk == family.members.len() {
-            "high"
-        } else if risk == 0 {
-            "low"
-        } else {
-            "medium"
-        };
-        let roles = family
-            .members
-            .iter()
-            .map(|member| member.role.name())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>()
-            .join(",");
+        let risk_label = family_risk_label(&family.members);
+        let roles = family_roles(&family.members);
         let mut properties = BTreeMap::new();
         properties.insert("finding_kind".to_string(), "family-summary".to_string());
         properties.insert("clone_family_id".to_string(), family.id.clone());
