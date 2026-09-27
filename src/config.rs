@@ -94,6 +94,27 @@ pub(crate) struct NearCloneRule {
     pub(crate) similarity_threshold: f64,
     #[serde(default = "default_max_candidates")]
     pub(crate) max_candidates: usize,
+    /// Whether duplicated statement blocks inside large functions are reported.
+    #[serde(default = "default_true")]
+    pub(crate) detect_blocks: bool,
+    /// Candidate budget for block detection, independent of `max_candidates`.
+    ///
+    /// Block detection compares every shingle window of a function, so it needs
+    /// a wider budget than whole-function comparison to preserve recall.
+    #[serde(default = "default_block_max_candidates")]
+    pub(crate) block_max_candidates: usize,
+    /// Maximum duplicated blocks reported per function.
+    #[serde(default = "default_block_max_families")]
+    pub(crate) block_max_families: usize,
+    /// Minimum tokens in a duplicated block, defaulting to three times
+    /// `minimum_tokens`.
+    ///
+    /// Block detection exists for duplication that whole-function comparison
+    /// cannot see, which is duplication substantial enough to be worth
+    /// extracting. Small repeated idioms are already covered by the
+    /// whole-function floor and are not block findings.
+    #[serde(default)]
+    pub(crate) block_minimum_tokens: Option<usize>,
 }
 
 /// Structural erosion policy.
@@ -106,6 +127,9 @@ pub(crate) struct StructuralErosionRule {
     pub(crate) erosion_limit: f64,
     #[serde(default = "default_erosion_delta_limit")]
     pub(crate) delta_limit: f64,
+    /// Limit on growth of absolute high-complexity mass between base and head.
+    #[serde(default = "default_mass_growth_limit")]
+    pub(crate) mass_growth_limit: f64,
     #[serde(default = "default_complexity_cutoff")]
     pub(crate) complexity_cutoff: u32,
     #[serde(default = "default_top_contributors")]
@@ -160,6 +184,10 @@ impl Default for NearCloneRule {
             minimum_tokens: default_minimum_tokens(),
             similarity_threshold: default_similarity_threshold(),
             max_candidates: default_max_candidates(),
+            detect_blocks: default_true(),
+            block_max_candidates: default_block_max_candidates(),
+            block_max_families: default_block_max_families(),
+            block_minimum_tokens: None,
         }
     }
 }
@@ -170,6 +198,7 @@ macro_rules! structural_erosion_defaults {
             severity: RuleSeverity::Warn,
             erosion_limit: default_erosion_limit(),
             delta_limit: default_erosion_delta_limit(),
+            mass_growth_limit: default_mass_growth_limit(),
             complexity_cutoff: default_complexity_cutoff(),
             top_contributors: default_top_contributors(),
         }
@@ -179,6 +208,18 @@ macro_rules! structural_erosion_defaults {
 impl Default for StructuralErosionRule {
     fn default() -> Self {
         structural_erosion_defaults!()
+    }
+}
+
+impl NearCloneRule {
+    /// Returns the minimum tokens a duplicated block must span.
+    ///
+    /// # Returns
+    ///
+    /// Returns the configured override, or three times `minimum_tokens`.
+    pub(crate) fn block_minimum_tokens(&self) -> Option<usize> {
+        self.block_minimum_tokens
+            .or_else(|| self.minimum_tokens.checked_mul(3))
     }
 }
 
@@ -230,61 +271,121 @@ impl GateConfig {
                 format!("{}; expected {}", self.version, CONFIG_VERSION),
             ));
         }
-        if !self.rules.function_mass.new_function_limit.is_finite()
-            || self.rules.function_mass.new_function_limit < 0.0
-            || !self.rules.function_mass.delta_limit.is_finite()
-            || self.rules.function_mass.delta_limit < 0.0
-        {
-            return Err(Error::invalid(
-                "function-mass limits",
-                "must be finite non-negative numbers",
-            ));
-        }
-        let clone = &self.rules.near_clone;
-        if !(0.0..=1.0).contains(&clone.similarity_threshold)
-            || clone.minimum_sloc == 0
-            || clone.minimum_tokens == 0
-            || clone.max_candidates == 0
-        {
-            return Err(Error::invalid(
-                "near-clone thresholds",
-                "must be positive and similarity must be within 0.0..=1.0",
-            ));
-        }
-        let erosion = &self.rules.structural_erosion;
-        if !erosion.erosion_limit.is_finite()
-            || !(0.0..=1.0).contains(&erosion.erosion_limit)
-            || !erosion.delta_limit.is_finite()
-            || erosion.delta_limit < 0.0
-            || erosion.top_contributors == 0
-            || erosion.top_contributors > 10
-        {
-            return Err(Error::invalid(
-                "structural-erosion thresholds",
-                "limits must be finite, erosion_limit must be within 0.0..=1.0, and top_contributors must be within 1..=10",
-            ));
-        }
-        for suppression in &self.suppressions {
-            if !matches!(
-                suppression.rule.as_str(),
-                "function-mass"
-                    | "near-clone"
-                    | "lint-suppression-growth"
-                    | "unsafe-surface-growth"
-                    | "dependency-surface-growth"
-                    | "structural-erosion"
-            ) || !is_relative_path(&suppression.path)
-                || suppression.reason.trim().is_empty()
-                || suppression.line == Some(0)
-            {
-                return Err(Error::invalid(
-                    "suppression",
-                    "requires a supported rule, relative path, positive optional line, and reason",
-                ));
-            }
-        }
-        Ok(())
+        validate_function_mass(&self.rules.function_mass)?;
+        validate_near_clone(&self.rules.near_clone)?;
+        validate_structural_erosion(&self.rules.structural_erosion)?;
+        validate_suppressions(&self.suppressions)
     }
+}
+
+/// Validates function-mass limits.
+///
+/// # Arguments
+///
+/// * `rule` - Function-mass policy.
+///
+/// # Returns
+///
+/// Returns an error when a limit is negative or not finite.
+fn validate_function_mass(rule: &FunctionMassRule) -> Result<()> {
+    if !rule.new_function_limit.is_finite()
+        || rule.new_function_limit < 0.0
+        || !rule.delta_limit.is_finite()
+        || rule.delta_limit < 0.0
+    {
+        return Err(Error::invalid(
+            "function-mass limits",
+            "must be finite non-negative numbers",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates near-clone thresholds.
+///
+/// # Arguments
+///
+/// * `rule` - Near-clone policy.
+///
+/// # Returns
+///
+/// Returns an error when a threshold is unusable. `minimum_tokens` must exceed
+/// one shingle window, or block detection cannot express a run length.
+fn validate_near_clone(rule: &NearCloneRule) -> Result<()> {
+    if !(0.0..=1.0).contains(&rule.similarity_threshold)
+        || rule.minimum_sloc == 0
+        || rule.minimum_tokens <= crate::analysis::SHINGLE_SIZE
+        || rule.max_candidates == 0
+        || rule.block_max_candidates == 0
+        || rule.block_max_families == 0
+        || rule.block_minimum_tokens().is_none()
+    {
+        return Err(Error::invalid(
+            "near-clone thresholds",
+            "must be positive, similarity must be within 0.0..=1.0, and minimum_tokens must exceed one shingle window",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates structural-erosion limits.
+///
+/// # Arguments
+///
+/// * `rule` - Structural-erosion policy.
+///
+/// # Returns
+///
+/// Returns an error when a limit is out of range.
+fn validate_structural_erosion(rule: &StructuralErosionRule) -> Result<()> {
+    if !rule.erosion_limit.is_finite()
+        || !(0.0..=1.0).contains(&rule.erosion_limit)
+        || !rule.delta_limit.is_finite()
+        || rule.delta_limit < 0.0
+        || !rule.mass_growth_limit.is_finite()
+        || rule.mass_growth_limit < 0.0
+        || rule.top_contributors == 0
+        || rule.top_contributors > 10
+    {
+        return Err(Error::invalid(
+            "structural-erosion thresholds",
+            "limits must be finite, erosion_limit must be within 0.0..=1.0, and top_contributors must be within 1..=10",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates configured suppressions.
+///
+/// # Arguments
+///
+/// * `suppressions` - Declared exceptions.
+///
+/// # Returns
+///
+/// Returns an error when a suppression names an unsupported rule, an absolute
+/// path, a zero line, or no reason.
+fn validate_suppressions(suppressions: &[Suppression]) -> Result<()> {
+    for suppression in suppressions {
+        if !matches!(
+            suppression.rule.as_str(),
+            "function-mass"
+                | "near-clone"
+                | "lint-suppression-growth"
+                | "unsafe-surface-growth"
+                | "dependency-surface-growth"
+                | "structural-erosion"
+        ) || !is_relative_path(&suppression.path)
+            || suppression.reason.trim().is_empty()
+            || suppression.line == Some(0)
+        {
+            return Err(Error::invalid(
+                "suppression",
+                "requires a supported rule, relative path, positive optional line, and reason",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn default_version() -> u32 {
@@ -308,10 +409,22 @@ fn default_similarity_threshold() -> f64 {
 fn default_max_candidates() -> usize {
     64
 }
+fn default_block_max_candidates() -> usize {
+    256
+}
+fn default_block_max_families() -> usize {
+    3
+}
+fn default_true() -> bool {
+    true
+}
 fn default_erosion_limit() -> f64 {
     0.50
 }
 fn default_erosion_delta_limit() -> f64 {
+    0.08
+}
+fn default_mass_growth_limit() -> f64 {
     0.08
 }
 fn default_complexity_cutoff() -> u32 {
@@ -333,6 +446,10 @@ mod tests {
         assert_eq!(config.rules.lint_suppression.severity, RuleSeverity::Warn);
         assert_eq!(config.rules.structural_erosion.erosion_limit, 0.50);
         assert_eq!(config.rules.structural_erosion.delta_limit, 0.08);
+        assert_eq!(config.rules.structural_erosion.mass_growth_limit, 0.08);
+        assert!(config.rules.near_clone.detect_blocks);
+        assert_eq!(config.rules.near_clone.block_max_candidates, 256);
+        assert_eq!(config.rules.near_clone.block_max_families, 3);
         assert_eq!(config.rules.structural_erosion.complexity_cutoff, 10);
         assert_eq!(config.rules.structural_erosion.top_contributors, 3);
     }

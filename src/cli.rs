@@ -185,6 +185,10 @@ minimum_sloc = 8
 minimum_tokens = 40
 similarity_threshold = 0.85
 max_candidates = 64
+detect_blocks = true       # duplicated statement blocks inside large functions
+block_max_candidates = 256 # wider budget than whole-function comparison
+block_max_families = 3     # blocks reported per function
+# block_minimum_tokens = 120  # defaults to 3x minimum_tokens
 
 [rules.lint_suppression]
 severity = "warn"
@@ -199,6 +203,7 @@ severity = "warn"
 severity = "warn"
 erosion_limit = 0.50
 delta_limit = 0.08
+mass_growth_limit = 0.08   # growth of absolute high-complexity mass
 complexity_cutoff = 10
 top_contributors = 3
 

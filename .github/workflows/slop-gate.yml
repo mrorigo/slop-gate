@@ -43,6 +43,12 @@ jobs:
           printf '%s  %s\n' "$checksum" "$RUNNER_TEMP/$asset" | sha256sum --check
           tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/slop-gate/bin"
           echo "$RUNNER_TEMP/slop-gate/bin" >> "$GITHUB_PATH"
+          # Print the resolved version first: when SLOP_GATE_RELEASE drifts, the
+          # first line of diagnosis must not require an API call. The binary is
+          # invoked by path because $GITHUB_PATH only applies to later steps, and
+          # a missing binary must fail the step rather than print an empty line.
+          resolved="$("$RUNNER_TEMP/slop-gate/bin/slop-gate" --version)"
+          echo "$resolved"
       - run: mkdir -p .slop-gate
       - run: slop-gate index --ref HEAD --output .slop-gate/index.json
       - uses: actions/cache/save@v4
@@ -78,6 +84,12 @@ jobs:
           printf '%s  %s\n' "$checksum" "$RUNNER_TEMP/$asset" | sha256sum --check
           tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/slop-gate/bin"
           echo "$RUNNER_TEMP/slop-gate/bin" >> "$GITHUB_PATH"
+          # Print the resolved version first: when SLOP_GATE_RELEASE drifts, the
+          # first line of diagnosis must not require an API call. The binary is
+          # invoked by path because $GITHUB_PATH only applies to later steps, and
+          # a missing binary must fail the step rather than print an empty line.
+          resolved="$("$RUNNER_TEMP/slop-gate/bin/slop-gate" --version)"
+          echo "$resolved"
       - uses: actions/cache/restore@v4
         id: restore-index
         with:

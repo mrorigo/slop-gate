@@ -37,6 +37,49 @@ pub enum FunctionKind {
     Function,
 }
 
+/// The coarse structural role of a function, used to rank duplication risk.
+///
+/// Roles are deliberately conservative. A function is only classified as
+/// boilerplate when its normalized shape is unambiguous, because a wrong
+/// classification would hide a real duplicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FunctionRole {
+    /// Test or test-support code, where duplication is usually acceptable.
+    Test,
+    /// A field or element accessor, where duplication is idiomatic.
+    Accessor,
+    /// A constructor or configuration mapper, where duplication is idiomatic.
+    Constructor,
+    /// Production logic with no recognized boilerplate shape.
+    General,
+}
+
+impl FunctionRole {
+    /// Returns whether duplication of this role is normally acceptable.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` for [`FunctionRole::Test`] and [`FunctionRole::Accessor`].
+    pub fn is_low_risk(self) -> bool {
+        matches!(self, Self::Test | Self::Accessor)
+    }
+
+    /// Returns the stable lowercase name used in findings.
+    ///
+    /// # Returns
+    ///
+    /// Returns one of `test`, `accessor`, `constructor`, or `general`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Test => "test",
+            Self::Accessor => "accessor",
+            Self::Constructor => "constructor",
+            Self::General => "general",
+        }
+    }
+}
+
 /// Deterministic structural facts about one named function.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FunctionRecord {
@@ -63,9 +106,116 @@ pub struct FunctionRecord {
     /// `cc * sqrt(sloc)`.
     pub mass: f64,
     /// Sorted unique BLAKE3-truncated hashes of five-token shingles.
-    pub shingle_hashes: Vec<u64>,
+    ///
+    /// Hashes are truncated to 32 bits so a shingle can be compared against
+    /// [`FunctionRecord::token_shingle_sequence`] without widening storage.
+    /// Similarity is aggregated over hundreds of shingles, so a single
+    /// collision cannot move a score materially.
+    pub shingle_hashes: Vec<u32>,
     /// Sorted unique BLAKE3-truncated hashes of five-node AST shingles.
-    pub ast_shingle_hashes: Vec<u64>,
+    pub ast_shingle_hashes: Vec<u32>,
+    /// Ordered five-token shingle hashes, one per window start position.
+    ///
+    /// Unlike [`FunctionRecord::shingle_hashes`], this sequence preserves
+    /// position so a contiguous island can be located inside a large function.
+    #[serde(with = "hex_sequence")]
+    pub token_shingle_sequence: Vec<u32>,
+    /// Ordered five-node AST shingle hashes, one per window start position.
+    #[serde(with = "hex_sequence")]
+    pub ast_shingle_sequence: Vec<u32>,
+    /// Run-length encoded start lines for [`FunctionRecord::token_shingle_sequence`].
+    ///
+    /// Each consecutive pair is a shingle count and the one-based line of that
+    /// run's first shingle.
+    pub token_line_runs: Vec<u32>,
+    /// Run-length encoded start lines for [`FunctionRecord::ast_shingle_sequence`].
+    pub ast_line_runs: Vec<u32>,
+    /// Coarse structural role used to rank duplication risk.
+    pub role: FunctionRole,
+}
+
+/// Compact hexadecimal encoding for ordered shingle sequences.
+///
+/// Ordered sequences are the largest artifact field by volume, so they are
+/// stored as one hexadecimal string per function rather than a JSON integer
+/// array. The decoded value is identical either way.
+mod hex_sequence {
+    use serde::de::Error as _;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(
+        sequence: &[u32],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut encoded = String::with_capacity(sequence.len() * 8);
+        for hash in sequence {
+            encoded.push_str(&format!("{hash:08x}"));
+        }
+        serializer.serialize_str(&encoded)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<u32>, D::Error> {
+        let encoded = String::deserialize(deserializer)?;
+        if !encoded.len().is_multiple_of(8) {
+            return Err(D::Error::custom(
+                "shingle sequence length must be a multiple of eight hexadecimal characters",
+            ));
+        }
+        encoded
+            .as_bytes()
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|chunk| {
+                std::str::from_utf8(chunk.as_slice())
+                    .ok()
+                    .and_then(|text| u32::from_str_radix(text, 16).ok())
+                    .ok_or_else(|| D::Error::custom("shingle sequence is not hexadecimal"))
+            })
+            .collect()
+    }
+}
+
+impl FunctionRecord {
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - Zero-based position in [`FunctionRecord::token_shingle_sequence`].
+    ///
+    /// # Returns
+    ///
+    /// Returns the recorded line, or the function start line when the position
+    /// falls outside the encoded runs.
+    pub fn token_line_at(&self, index: usize) -> usize {
+        run_encoded_line(&self.token_line_runs, index).unwrap_or(self.start_line)
+    }
+
+    /// Returns the one-based start line of an AST shingle position.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - Zero-based position in [`FunctionRecord::ast_shingle_sequence`].
+    ///
+    /// # Returns
+    ///
+    /// Returns the recorded line, or the function start line when the position
+    /// falls outside the encoded runs.
+    pub fn ast_line_at(&self, index: usize) -> usize {
+        run_encoded_line(&self.ast_line_runs, index).unwrap_or(self.start_line)
+    }
+}
+
+fn run_encoded_line(runs: &[u32], index: usize) -> Option<usize> {
+    let mut remaining = index;
+    for [count, line] in runs.as_chunks::<2>().0 {
+        if remaining < *count as usize {
+            return Some(*line as usize);
+        }
+        remaining -= *count as usize;
+    }
+    None
 }
 
 /// Aggregate complexity facts for one analyzed repository revision.
@@ -103,6 +253,46 @@ pub struct ContributorLocation {
 }
 
 impl RepositorySummary {
+    /// Returns whether two summaries agree to within floating-point noise.
+    ///
+    /// Artifact validation must not fail on a last-bit difference. Floating
+    /// point addition is not associative, so a sum recomputed after a JSON
+    /// round trip can differ from the stored sum by one unit in the last place
+    /// even when nothing is wrong with the artifact. The comparison is exact
+    /// for every count and identifier, and relative for every mass.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Summary recomputed from the same function facts.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` when the two summaries describe the same measurements.
+    pub fn equivalent_to(&self, other: &Self) -> bool {
+        fn close(left: f64, right: f64) -> bool {
+            const RELATIVE_TOLERANCE: f64 = 1e-9;
+            let scale = left.abs().max(right.abs()).max(1.0);
+            (left - right).abs() <= RELATIVE_TOLERANCE * scale
+        }
+        fn same_contributors(left: &[ContributorLocation], right: &[ContributorLocation]) -> bool {
+            left.len() == right.len()
+                && left.iter().zip(right).all(|(left, right)| {
+                    left.path == right.path
+                        && left.qualified_name == right.qualified_name
+                        && left.line == right.line
+                        && left.cc == right.cc
+                        && close(left.mass, right.mass)
+                })
+        }
+        close(self.total_mass, other.total_mass)
+            && close(self.high_complexity_mass, other.high_complexity_mass)
+            && close(self.erosion_ratio, other.erosion_ratio)
+            && close(self.maximum_function_mass, other.maximum_function_mass)
+            && self.high_complexity_function_count == other.high_complexity_function_count
+            && self.maximum_function_cc == other.maximum_function_cc
+            && same_contributors(&self.top_contributors, &other.top_contributors)
+    }
+
     /// Computes aggregate complexity facts using the default erosion cutoff.
     pub fn from_files(files: &[AnalyzedFile]) -> Self {
         Self::from_files_with_cutoff(files, 10)

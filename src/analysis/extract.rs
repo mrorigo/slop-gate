@@ -3,18 +3,20 @@
 
 use std::collections::BTreeSet;
 
-use tree_sitter::{Node, Parser};
+use tree_sitter::{Node, Parser, Tree};
 
 use crate::error::{Error, Result};
 use crate::path::is_relative_path;
 
 use super::{
-    AnalyzedFile, DependencyEdge, FunctionIdentity, FunctionKind, FunctionRecord, LintSuppression,
-    UnsafeSurface,
+    AnalyzedFile, DependencyEdge, FunctionIdentity, FunctionKind, FunctionRecord, FunctionRole,
+    LintSuppression, UnsafeSurface,
 };
 
 const LANGUAGE: &str = "rust";
-const SHINGLE_SIZE: usize = 5;
+/// Number of normalized stream elements in one shingle window.
+pub const SHINGLE_SIZE: usize = 5;
+const CONSTRUCTOR_COMPLEXITY_LIMIT: u32 = 3;
 
 /// Extracts direct production and build dependency edges from a Cargo manifest.
 pub(crate) fn dependency_edges(source: &str) -> Result<Vec<DependencyEdge>> {
@@ -211,6 +213,37 @@ pub fn analyze_rust_file(path: &str, source: &str) -> Result<AnalyzedFile> {
             format!("{path:?}"),
         ));
     }
+    let tree = parse_rust(source)?;
+
+    let mut functions = Vec::new();
+    collect_functions(tree.root_node(), source, path, &[], &mut functions)?;
+    Ok(AnalyzedFile {
+        path: path.to_string(),
+        language: LANGUAGE.to_string(),
+        content_hash: blake3::hash(source.as_bytes()).to_hex().to_string(),
+        functions,
+    })
+}
+
+/// Parses Rust source with the supported grammar, rejecting syntax errors.
+///
+/// Every analysis entry point needs the same grammar, the same parse, and the
+/// same refusal to guess at broken source, so the setup is shared rather than
+/// repeated per entry point.
+///
+/// # Arguments
+///
+/// * `source` - Complete Rust source text.
+///
+/// # Returns
+///
+/// Returns the parsed syntax tree.
+///
+/// # Errors
+///
+/// Returns an error when the grammar cannot be loaded, the parser produces no
+/// tree, or the source contains syntax errors.
+fn parse_rust(source: &str) -> Result<Tree> {
     let mut parser = Parser::new();
     let language = tree_sitter_rust_orchard::LANGUAGE.into();
     parser
@@ -231,15 +264,7 @@ pub fn analyze_rust_file(path: &str, source: &str) -> Result<AnalyzedFile> {
             ),
         ));
     }
-
-    let mut functions = Vec::new();
-    collect_functions(tree.root_node(), source, path, &[], &mut functions)?;
-    Ok(AnalyzedFile {
-        path: path.to_string(),
-        language: LANGUAGE.to_string(),
-        content_hash: blake3::hash(source.as_bytes()).to_hex().to_string(),
-        functions,
-    })
+    Ok(tree)
 }
 
 fn first_error_node(node: Node<'_>) -> Node<'_> {
@@ -263,17 +288,7 @@ pub(crate) fn lint_suppressions(path: &str, source: &str) -> Result<Vec<LintSupp
             format!("{path:?}"),
         ));
     }
-    let mut parser = Parser::new();
-    let language = tree_sitter_rust_orchard::LANGUAGE.into();
-    parser
-        .set_language(&language)
-        .map_err(|error| Error::invalid("Rust parser", error))?;
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| Error::invalid("Rust parser", "did not produce a syntax tree"))?;
-    if tree.root_node().has_error() {
-        return Err(Error::invalid("Rust source", "contains syntax errors"));
-    }
+    let tree = parse_rust(source)?;
     let mut result = Vec::new();
     collect_lint_suppressions(tree.root_node(), source, &mut result)?;
     result.sort_by(|left, right| {
@@ -290,17 +305,7 @@ pub(crate) fn unsafe_surface(path: &str, source: &str) -> Result<Vec<UnsafeSurfa
             format!("{path:?}"),
         ));
     }
-    let mut parser = Parser::new();
-    let language = tree_sitter_rust_orchard::LANGUAGE.into();
-    parser
-        .set_language(&language)
-        .map_err(|error| Error::invalid("Rust parser", error))?;
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| Error::invalid("Rust parser", "did not produce a syntax tree"))?;
-    if tree.root_node().has_error() {
-        return Err(Error::invalid("Rust source", "contains syntax errors"));
-    }
+    let tree = parse_rust(source)?;
     let mut result = Vec::new();
     collect_unsafe_surface(tree.root_node(), source, &mut result)?;
     result.sort_by_key(|fact| (fact.line, fact.pattern_id.clone()));
@@ -398,9 +403,16 @@ fn collect_lint_suppressions(
                 .map(|target| normalized_tokens(target, source, true))
                 .transpose()?
                 .map(|tokens| {
-                    blake3::hash(tokens.join("\u{1f}").as_bytes())
-                        .to_hex()
-                        .to_string()
+                    blake3::hash(
+                        tokens
+                            .iter()
+                            .map(|token| token.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\u{1f}")
+                            .as_bytes(),
+                    )
+                    .to_hex()
+                    .to_string()
                 })
                 .unwrap_or_else(|| "file".to_string());
             result.push(LintSuppression {
@@ -497,21 +509,40 @@ fn record_function(
     qualified_parts.push(name.clone());
     let tokens = normalized_tokens(node, source, true)?;
     let token_count = tokens.len();
-    let normalized_hash = blake3::hash(tokens.join("\u{1f}").as_bytes())
-        .to_hex()
-        .to_string();
+    let normalized_hash = blake3::hash(
+        tokens
+            .iter()
+            .map(|token| token.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\u{1f}")
+            .as_bytes(),
+    )
+    .to_hex()
+    .to_string();
     let token_shingle_hashes = shingle_hashes(&tokens);
+    let token_shingle_sequence = ordered_shingles(&tokens);
+    let token_line_runs = encode_line_runs(&tokens);
     let ast_stream = normalized_ast(node, source, true)?;
-    let ast_hash = blake3::hash(ast_stream.join("\u{1f}").as_bytes())
-        .to_hex()
-        .to_string();
+    let ast_hash = blake3::hash(
+        ast_stream
+            .iter()
+            .map(|token| token.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\u{1f}")
+            .as_bytes(),
+    )
+    .to_hex()
+    .to_string();
     let ast_node_count = ast_stream
         .iter()
-        .filter(|token| !token.starts_with("/N:"))
+        .filter(|token| !token.text.starts_with("/N:"))
         .count();
     let ast_shingle_hashes = shingle_hashes(&ast_stream);
+    let ast_shingle_sequence = ordered_shingles(&ast_stream);
+    let ast_line_runs = encode_line_runs(&ast_stream);
     let sloc = physical_sloc(node, source)?;
     let cc = cyclomatic_complexity(node, source)?;
+    let role = classify_role(&name, path, scopes, &ast_stream, cc);
 
     Ok(FunctionRecord {
         identity: FunctionIdentity {
@@ -532,21 +563,23 @@ fn record_function(
         mass: f64::from(cc) * (sloc as f64).sqrt(),
         shingle_hashes: token_shingle_hashes,
         ast_shingle_hashes,
+        token_shingle_sequence,
+        ast_shingle_sequence,
+        token_line_runs,
+        ast_line_runs,
+        role,
     })
 }
 
-fn normalized_tokens(node: Node<'_>, source: &str, is_root: bool) -> Result<Vec<String>> {
-    if !is_root && node.kind() == "function_item" {
-        return Ok(Vec::new());
-    }
-    if matches!(
-        node.kind(),
-        "line_comment" | "block_comment" | "attributes" | "attribute_item" | "inner_attribute_item"
-    ) {
+fn normalized_tokens(node: Node<'_>, source: &str, is_root: bool) -> Result<Vec<NormalizedToken>> {
+    if is_omitted(node, is_root) {
         return Ok(Vec::new());
     }
     if node.child_count() == 0 {
-        return Ok(vec![normalize_leaf(node, source)?]);
+        return Ok(vec![NormalizedToken {
+            text: normalize_leaf(node, source)?,
+            line: node.start_position().row + 1,
+        }]);
     }
     let mut tokens = Vec::new();
     let mut cursor = node.walk();
@@ -556,25 +589,61 @@ fn normalized_tokens(node: Node<'_>, source: &str, is_root: bool) -> Result<Vec<
     Ok(tokens)
 }
 
-fn normalized_ast(node: Node<'_>, source: &str, is_root: bool) -> Result<Vec<String>> {
-    if !is_root && node.kind() == "function_item" {
-        return Ok(Vec::new());
-    }
-    if matches!(
-        node.kind(),
-        "line_comment" | "block_comment" | "attributes" | "attribute_item" | "inner_attribute_item"
-    ) {
+/// Returns whether a node contributes nothing to a normalized stream.
+///
+/// Nested functions are analyzed on their own, and comments and attributes are
+/// not part of the structural signal. Both normalized streams omit exactly the
+/// same nodes, so the decision is shared rather than repeated per stream.
+///
+/// # Arguments
+///
+/// * `node` - Node under consideration.
+/// * `is_root` - Whether the node is the declaration being analyzed.
+///
+/// # Returns
+///
+/// Returns `true` when the node must be skipped.
+fn is_omitted(node: Node<'_>, is_root: bool) -> bool {
+    (!is_root && node.kind() == "function_item")
+        || matches!(
+            node.kind(),
+            "line_comment"
+                | "block_comment"
+                | "attributes"
+                | "attribute_item"
+                | "inner_attribute_item"
+        )
+}
+
+/// One normalized token with the source line that produced it.
+struct NormalizedToken {
+    text: String,
+    line: usize,
+}
+
+fn normalized_ast(node: Node<'_>, source: &str, is_root: bool) -> Result<Vec<NormalizedToken>> {
+    if is_omitted(node, is_root) {
         return Ok(Vec::new());
     }
     if node.child_count() == 0 {
-        return Ok(vec![format!("L:{}", normalize_leaf(node, source)?)]);
+        return Ok(vec![NormalizedToken {
+            text: format!("L:{}", normalize_leaf(node, source)?),
+            line: node.start_position().row + 1,
+        }]);
     }
-    let mut stream = vec![format!("N:{}", node.kind())];
+    let line = node.start_position().row + 1;
+    let mut stream = vec![NormalizedToken {
+        text: format!("N:{}", node.kind()),
+        line,
+    }];
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         stream.extend(normalized_ast(child, source, false)?);
     }
-    stream.push(format!("/N:{}", node.kind()));
+    stream.push(NormalizedToken {
+        text: format!("/N:{}", node.kind()),
+        line: node.end_position().row + 1,
+    });
     Ok(stream)
 }
 
@@ -596,18 +665,197 @@ fn normalize_leaf(node: Node<'_>, source: &str) -> Result<String> {
     Ok(text.to_string())
 }
 
-fn shingle_hashes(tokens: &[String]) -> Vec<u64> {
-    if tokens.len() < SHINGLE_SIZE {
+fn shingle_hashes(tokens: &[NormalizedToken]) -> Vec<u32> {
+    ordered_shingles(tokens)
+        .into_iter()
+        .collect::<BTreeSet<u32>>()
+        .into_iter()
+        .collect()
+}
+
+/// Returns the ordered truncated shingle hashes of a normalized stream.
+///
+/// # Arguments
+///
+/// * `stream` - Normalized tokens or AST nodes in source order.
+///
+/// # Returns
+///
+/// Returns one truncated hash per shingle window, in source order.
+fn ordered_shingles(stream: &[NormalizedToken]) -> Vec<u32> {
+    if stream.len() < SHINGLE_SIZE {
         return Vec::new();
     }
-    let mut hashes = BTreeSet::new();
-    for window in tokens.windows(SHINGLE_SIZE) {
-        let hash = blake3::hash(window.join("\u{1f}").as_bytes());
-        let mut bytes = [0_u8; 8];
-        bytes.copy_from_slice(&hash.as_bytes()[..8]);
-        hashes.insert(u64::from_le_bytes(bytes));
+    stream
+        .windows(SHINGLE_SIZE)
+        .map(|window| {
+            let joined = window
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\u{1f}");
+            let hash = blake3::hash(joined.as_bytes());
+            let mut bytes = [0_u8; 4];
+            bytes.copy_from_slice(&hash.as_bytes()[..4]);
+            u32::from_le_bytes(bytes)
+        })
+        .collect()
+}
+
+/// Run-length encodes the start line of every shingle window.
+///
+/// # Arguments
+///
+/// * `stream` - Normalized tokens or AST nodes in source order.
+///
+/// # Returns
+///
+/// Returns flattened `count, line` pairs describing the encoded runs.
+fn encode_line_runs(stream: &[NormalizedToken]) -> Vec<u32> {
+    let shingle_count = stream.len().saturating_sub(SHINGLE_SIZE - 1);
+    let mut runs: Vec<u32> = Vec::new();
+    for line in stream
+        .iter()
+        .take(shingle_count)
+        .map(|token| token.line as u32)
+    {
+        match runs.last() {
+            Some(last) if *last == line => {
+                let count = runs.len();
+                runs[count - 2] += 1;
+            }
+            _ => runs.extend_from_slice(&[1, line]),
+        }
     }
-    hashes.into_iter().collect()
+    runs
+}
+
+/// Classifies a function's structural role from conservative shape signals.
+///
+/// # Arguments
+///
+/// * `name` - Unqualified function name.
+/// * `path` - Repository-relative file path.
+/// * `scopes` - Enclosing module, trait, and implementation scopes.
+/// * `ast` - Normalized AST stream for the declaration.
+/// * `cc` - Cyclomatic complexity of the declaration.
+///
+/// # Returns
+///
+/// Returns the detected [`FunctionRole`], defaulting to
+/// [`FunctionRole::General`].
+fn classify_role(
+    name: &str,
+    path: &str,
+    scopes: &[String],
+    ast: &[NormalizedToken],
+    cc: u32,
+) -> FunctionRole {
+    if is_test_code(name, path, scopes) {
+        return FunctionRole::Test;
+    }
+    if is_accessor(ast, cc) {
+        return FunctionRole::Accessor;
+    }
+    if is_constructor(name, ast, cc) {
+        return FunctionRole::Constructor;
+    }
+    FunctionRole::General
+}
+
+/// Returns whether a declaration belongs to test or test-support code.
+///
+/// # Arguments
+///
+/// * `name` - Unqualified function name.
+/// * `path` - Repository-relative file path.
+/// * `scopes` - Enclosing module, trait, and implementation scopes.
+///
+/// # Returns
+///
+/// Returns `true` when the declaration is test code.
+fn is_test_code(name: &str, path: &str, scopes: &[String]) -> bool {
+    scopes
+        .iter()
+        .any(|scope| scope == "test" || scope == "tests")
+        || path.split('/').any(|segment| segment == "tests")
+        || path.ends_with("test.rs")
+        || name.ends_with("_test")
+        || name.starts_with("test_")
+}
+
+/// Returns whether a declaration is a field or element accessor.
+///
+/// # Arguments
+///
+/// * `ast` - Normalized AST stream for the declaration.
+/// * `cc` - Cyclomatic complexity of the declaration.
+///
+/// # Returns
+///
+/// Returns `true` for a field read with no control flow and no bindings, which
+/// is idiomatic to repeat however it is formatted. No length cap applies: a
+/// capped accessor could never be reported, because the whole-function token
+/// floor sits above any useful cap.
+fn is_accessor(ast: &[NormalizedToken], cc: u32) -> bool {
+    if cc > 1 {
+        return false;
+    }
+    let mut reads_field = false;
+    for node in ast {
+        match node.text.as_str() {
+            "N:field_expression" | "N:index_expression" => reads_field = true,
+            node if is_control_flow_node(node) || is_binding_node(node) => return false,
+            _ => {}
+        }
+    }
+    reads_field
+}
+
+/// Returns whether a declaration is a constructor or configuration mapper.
+///
+/// # Arguments
+///
+/// * `name` - Unqualified function name.
+/// * `ast` - Normalized AST stream for the declaration.
+/// * `cc` - Cyclomatic complexity of the declaration.
+///
+/// # Returns
+///
+/// Returns `true` for a low-complexity declaration that builds a value under a
+/// constructor-shaped name.
+fn is_constructor(name: &str, ast: &[NormalizedToken], cc: u32) -> bool {
+    if cc > CONSTRUCTOR_COMPLEXITY_LIMIT {
+        return false;
+    }
+    let named_like_a_constructor = name == "new"
+        || name.starts_with("new_")
+        || name.starts_with("from_")
+        || name.starts_with("with_");
+    named_like_a_constructor
+        || ast.iter().any(|node| {
+            matches!(
+                node.text.as_str(),
+                "N:struct_expression" | "N:tuple_expression"
+            )
+        })
+}
+
+/// Returns whether a normalized AST node is a control-flow construct.
+fn is_control_flow_node(node: &str) -> bool {
+    matches!(
+        node,
+        "N:if_expression"
+            | "N:match_expression"
+            | "N:loop_expression"
+            | "N:while_expression"
+            | "N:for_expression"
+    )
+}
+
+/// Returns whether a normalized AST node introduces a local binding.
+fn is_binding_node(node: &str) -> bool {
+    node == "N:let_declaration"
 }
 
 fn physical_sloc(node: Node<'_>, source: &str) -> Result<usize> {

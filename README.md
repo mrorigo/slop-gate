@@ -32,6 +32,60 @@ of code (SLOC) exclude blank and comment-only lines. Identifiers and literals
 are normalized before clone comparison, so a renamed copy still matches. Clone
 candidates must pass both normalized token and AST similarity thresholds.
 
+━━ How block detection works
+
+Whole-function similarity dilutes as functions grow: a byte-identical 30-line
+block inside two 187-line functions scores near 0.16 as a whole-function pair
+and is never reported. Block detection is function-independent. It takes the
+longest contiguous run of shingles that also occurs in another function and
+scores that run against block_minimum_tokens, which defaults to three times
+minimum_tokens. The finding points at both islands, not at two declarations.
+
+Whole-function comparison alone would miss the case that matters most, where a
+byte-identical pair silently diverges when someone fixes one copy.
+
+────────────────────────────────────────────────────────────────────────────────
+ block_minimum_tokens   Findings on a 9.3k-line repository   30-line island    
+────────────────────────────────────────────────────────────────────────────────
+ 40 (= minimum_tokens)                                          82      found  
+ 60                                                           24      found  
+ 80                                                           10      found  
+ 120 (default)                                                 2      found  
+ 160                                                            1      found  
+────────────────────────────────────────────────────────────────────────────────
+
+The default sits at the knee of that curve: it keeps the recall that motivates
+the rule while reporting only duplication substantial enough to extract. The
+two findings at the default are real duplicated blocks in the analyzer.
+
+Block detection has its own candidate budget (block_max_candidates) because it
+compares every shingle window of a function rather than one summary per
+function. The default is 256 against 64 for whole-function comparison; reusing
+the smaller budget reintroduces the recall gap the rule exists to close.
+
+Findings carry a scope, a risk, and a role for both sides:
+
+────────────────────────────────────────────────────────────────────────────────
+ Property       Values                                                       
+────────────────────────────────────────────────────────────────────────────────
+ clone_scope    whole-function, block                                        
+ clone_risk     high, medium, low                                              
+ left_role      test, accessor, constructor, general                           
+ right_role     test, accessor, constructor, general                           
+ same_file      true, false                                                    
+────────────────────────────────────────────────────────────────────────────────
+
+Risk is high when both sides are production logic, medium when one side is a
+constructor, and low when either side is a test or an accessor. A clone-family
+summary reports duplicate_mass as the recoverable mass, which is the family
+total minus its largest member, alongside the raw family_mass. Reporting the
+family total overstates the available refactor by roughly the size of the
+function that would be kept.
+
+Index artifacts now carry an ordered shingle sequence and a run-length encoded
+line table per function so a block can be located in source. That raises a
+schema-9k-line-repository artifact from 1.29 MB to 1.72 MB.
+
 ## Install
 
 Build from this checkout:
@@ -96,8 +150,15 @@ The command refuses to replace an existing `.slop-gate.toml`. Use
      --format sarif > slop-gate.sarif
    ```
 
-The artifact is tied to both the exact base commit and the active policy. A
-changed policy requires a rebuilt artifact. The reference GitHub Actions
+The artifact is tied to the exact base commit, the active policy, the tool
+version, and a build-script fingerprint of the analyzer sources. Any of those
+changing requires a rebuilt artifact, and the failure names both versions:
+
+  slop-gate check: invalid artifact tool version: index was built by slop-gate
+  0.4.0, this is slop-gate 0.5.0; rebuild the index with `slop-gate index`
+
+The workflow prints the resolved version before it runs the gate, so a drifted
+SLOP_GATE_RELEASE is visible in the first lines of the log. The reference GitHub Actions
 workflow is [`.github/workflows/slop-gate.yml`](.github/workflows/slop-gate.yml).
 It downloads and verifies the latest published Linux binary, so copying the
 workflow into another repository does not require adding Slop Gate to that
@@ -138,7 +199,9 @@ slop-gate history --ref HEAD --count 12 --complexity-cutoffs 5,10,15 --format js
 
 Use `--threshold`, `--min-sloc`, and `--top` to tune exploratory output.
 Warning findings do not fail the command; configured error findings exit 1.
-Reports include pair findings and clone-family summaries with duplicate mass.
+Reports include pair findings at both scopes and clone-family summaries. A
+summary's `duplicate_mass` is recoverable mass, the family total minus its
+largest member, and `family_mass` is the raw total.
 
 Follow the [calibration protocol](docs/CALIBRATION.md) before changing a rule
 from `warn` to `error`.
@@ -159,6 +222,10 @@ delta_limit = 20.0
 
 [rules.near_clone]
 severity = "warn"          # off | warn | error
+detect_blocks = true       # duplicated statement blocks inside large functions
+block_max_candidates = 256 # wider budget than whole-function comparison
+block_max_families = 3     # blocks reported per function
+# block_minimum_tokens = 120  # defaults to 3x minimum_tokens
 
 [rules.lint_suppression]
 severity = "warn"
@@ -173,6 +240,7 @@ severity = "warn"
 severity = "warn"
 erosion_limit = 0.50
 delta_limit = 0.08
+mass_growth_limit = 0.08   # growth of absolute high-complexity mass
 complexity_cutoff = 10
 top_contributors = 3
 

@@ -99,6 +99,68 @@ This addresses the main actionability failure observed in the review sample.
 The run therefore does not satisfy the plan's threshold-decision criteria.
 The rule remains warning-only.
 
+## v0.5 changes from adopter evidence
+
+Feedback from wiring Slop Gate into a 7k-line pure-Rust repository produced
+five changes. Two are measurement corrections to this report's own defaults.
+
+The ratio limit is permanently true for a large share of repositories. The
+monthly panel p95 is 0.8140 against an `erosion_limit` of 0.50, so for those
+repositories the level disjunct fires on every commit and the rule reduces to
+its delta disjunct. The adjacent-commit delta p99 is 0.0061209 and no sample in
+any run reached the 0.08 `delta_limit`, so that disjunct does not discriminate
+either. The rule was effectively inert.
+
+The ratio also cannot separate added complexity from deleted easy code. Deleting
+437 lines of low-complexity test code moved erosion from 75.89% to 76.06%
+because the denominator shrank while the high-complexity mass stayed put. The
+same report recorded a real refactor worth -0.58%, so a deletion and a
+deduplication were being compared as if they were the same class of change.
+
+v0.5 adds `mass_growth_limit`, the relative growth of absolute high-complexity
+mass, which is immune to denominator effects because it only moves when
+high-complexity mass itself moves. The finding now reports
+`base_high_complexity_mass`, `head_high_complexity_mass`,
+`high_complexity_mass_growth`, and the `breaches` that fired. Adjacent-commit
+high-complexity mass deltas measured over the last 40 first-parent revisions of
+this repository were 0 at the median, 114.1 at p90, and 230.6 at the maximum,
+against a base high-complexity mass of 1178.7, so 8% growth is above ordinary
+churn and below a real feature-sized addition.
+
+Every erosion finding now carries `erosion_at_cc_5`, `erosion_at_cc_10`,
+`erosion_at_cc_15`, `erosion_at_cc_20`, and `erosion_at_cc_30`. The panel means
+of 0.5033, 0.3507, and 0.2638 at cutoffs 5, 10, and 15 show that a single ratio
+is not comparable across repositories, and the distribution shows whether a
+repository is high everywhere or only at the configured cutoff. The per-repo
+cutoff that makes the ratio interpretable is still an open question; this makes
+the raw material available rather than answering it.
+
+Block detection calibration. The adopter's central finding was a recall gap: a
+byte-identical 30-line block inside two ~187-line functions scored 0.16 as a
+whole-function pair. Block detection is function-independent, and its
+`block_minimum_tokens` floor trades recall against the noise that whole-function
+comparison already produces. Measured on this repository at 9.3k lines, with
+the adopter's 30-line island as the recall probe:
+
+| block_minimum_tokens | findings on this repository | island found |
+| --- | --- | --- |
+| 40 (equal to minimum_tokens) | 82 | yes |
+| 60 | 24 | yes |
+| 80 | 10 | yes |
+| 120 (default, 3x minimum_tokens) | 2 | yes |
+| 160 | 1 | yes |
+| 400 | 1 | yes |
+
+The default sits at the knee. The two findings at the default are duplicated
+blocks in the analyzer's own normalization functions, both rated high risk.
+Recall for a genuinely large island is insensitive to the floor: the island
+stays found at every value tested, including one above its own size, because a
+byte-identical block scores full containment whenever the floor is cleared.
+
+The rule remains warning-only. This is one repository for the noise side of the
+trade and a synthetic probe for the recall side; it is not the 20-repository
+sample the release gate requires.
+
 ## Release gate
 
 Before promoting `structural-erosion` beyond warning severity, sample at least
@@ -111,6 +173,7 @@ The default limits remain provisional:
 ```toml
 erosion_limit = 0.50
 delta_limit = 0.08
+mass_growth_limit = 0.08
 ```
 
 The paper that motivated this rule reports Python measurements. Those values
