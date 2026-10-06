@@ -38,7 +38,7 @@ Scan the committed `HEAD` revision:
 slop-gate scan
 ```
 
-Include local edits and untracked, non-ignored Rust files:
+Include local edits and untracked, non-ignored supported source files:
 
 ```sh
 slop-gate scan --working-tree

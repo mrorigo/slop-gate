@@ -14,7 +14,7 @@ Source lines exclude blank and comment-only lines. The rule reports a new functi
 
 ## `near-clone`
 
-Finds structurally similar Rust functions and repeated blocks. Identifiers and literals are normalized, so renaming a copied implementation does not prevent a match. Whole-function candidates must pass both normalized token and AST-shingle similarity checks.
+Finds structurally similar functions within the same language and repeated blocks. Identifiers and literals are normalized, so renaming a copied implementation does not prevent a match. Whole-function candidates must pass both normalized token and AST-shingle similarity checks.
 
 Block detection finds long contiguous shingle runs shared by separate functions, including islands within otherwise large, dissimilar functions. It is enabled by default and has a separate candidate budget. Findings show the matching locations, scope (`whole-function` or `block`), similarity, and roles. Clone families summarize related pairs. Their `duplicate_mass` is recoverable mass: family mass minus its largest member.
 
@@ -46,4 +46,4 @@ The erosion ratio is high-complexity function mass divided by total function mas
 
 ## Analysis errors
 
-`check` reports a warning and skips a changed Rust file that cannot be analyzed; this is not a rule severity and does not by itself fail the command. Parse failures should be investigated, since skipped files cannot produce trustworthy rule results.
+`check` reports a warning and skips a changed supported source file that cannot be analyzed; this is not a rule severity and does not by itself fail the command. Parse failures should be investigated, since skipped files cannot produce trustworthy rule results. Rust-specific rules do not analyze Python or TypeScript files.

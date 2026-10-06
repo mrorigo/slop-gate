@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::analysis::{
     FunctionIdentity, FunctionRecord, FunctionRole, IndexArtifact, RepositorySummary, SHINGLE_SIZE,
-    analyze_rust_file, analyzer_fingerprint, analyzer_fingerprint_with_policy,
+    analyze_source_file, analyzer_fingerprint, analyzer_fingerprint_with_policy,
 };
 use crate::analysis::{dependency_edges, lint_suppressions, unsafe_surface};
 use crate::config::{GateConfig, NearCloneRule, RuleSeverity};
@@ -65,12 +65,12 @@ impl CheckReport {
 pub(crate) fn build_artifact(repository: &GitRepository, revision: &str) -> Result<IndexArtifact> {
     let commit = repository.resolve_revision(revision)?;
     let files = repository
-        .rust_files(&commit)?
+        .source_files(&commit)?
         .into_iter()
         .map(|path| {
             repository.read_blob(&commit, &path).and_then(|source| {
-                analyze_rust_file(&path, &source)
-                    .map_err(|error| Error::invalid("Rust source", format!("{path}: {error}")))
+                analyze_source_file(&path, &source)
+                    .map_err(|error| Error::invalid("source file", format!("{path}: {error}")))
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -84,12 +84,12 @@ pub(crate) fn build_working_tree_artifact(
 ) -> Result<IndexArtifact> {
     let commit = repository.resolve_revision("HEAD")?;
     let files = repository
-        .working_tree_rust_files(include_ignored)?
+        .working_tree_source_files(include_ignored)?
         .into_iter()
         .map(|path| {
             repository
                 .read_working_tree(&path)
-                .and_then(|source| analyze_rust_file(&path, &source))
+                .and_then(|source| analyze_source_file(&path, &source))
         })
         .collect::<Result<Vec<_>>>()?;
     IndexArtifact::new(commit, files)
@@ -106,15 +106,19 @@ pub(crate) fn summarize_revision_with_cutoffs(
     }
     let commit = repository.resolve_revision(revision)?;
     let files = repository
-        .rust_files(&commit)?
+        .source_files(&commit)?
         .into_iter()
         .map(|path| {
             repository.read_blob(&commit, &path).and_then(|source| {
-                analyze_rust_file(&path, &source)
-                    .map_err(|error| Error::invalid("Rust source", format!("{path}: {error}")))
+                analyze_source_file(&path, &source)
+                    .map_err(|error| Error::invalid("source file", format!("{path}: {error}")))
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let files = files
+        .into_iter()
+        .filter(|file| file.language == "rust")
+        .collect::<Vec<_>>();
     let summaries = complexity_cutoffs
         .iter()
         .map(|cutoff| RepositorySummary::from_files_with_cutoff(&files, *cutoff))
@@ -155,7 +159,7 @@ pub(crate) fn check_mass(
     };
     artifact.validate_with_fingerprint(&expected_fingerprint)?;
     let head_commit = repository.resolve_revision(head)?;
-    let changed = repository.changed_rust_files(&base_commit, &head_commit)?;
+    let changed = repository.changed_source_files(&base_commit, &head_commit)?;
     let base_functions = artifact
         .files
         .iter()
@@ -170,7 +174,7 @@ pub(crate) fn check_mass(
     let mut head_files = HashMap::new();
     for path in &changed.paths {
         let source = repository.read_blob(&head_commit, path)?;
-        match analyze_rust_file(path, &source) {
+        match analyze_source_file(path, &source) {
             Ok(file) => {
                 head_files.insert(path.clone(), file);
             }
@@ -196,7 +200,7 @@ pub(crate) fn check_mass(
     }
 
     let head_paths = repository
-        .rust_files(&head_commit)?
+        .source_files(&head_commit)?
         .into_iter()
         .collect::<HashSet<_>>();
     let changed_base_paths = changed
@@ -247,26 +251,28 @@ pub(crate) fn check_mass(
             continue;
         };
         let source = repository.read_blob(&head_commit, path)?;
-        evaluate_lint_suppressions(
-            repository,
-            &base_commit,
-            path,
-            changed.renamed_from.get(path.as_str()),
-            changed.added_lines.get(path.as_str()),
-            &source,
-            config,
-            &mut report,
-        )?;
-        evaluate_unsafe_surface(
-            repository,
-            &base_commit,
-            path,
-            changed.renamed_from.get(path.as_str()),
-            changed.added_lines.get(path.as_str()),
-            &source,
-            config,
-            &mut report,
-        )?;
+        if file.language == "rust" {
+            evaluate_lint_suppressions(
+                repository,
+                &base_commit,
+                path,
+                changed.renamed_from.get(path.as_str()),
+                changed.added_lines.get(path.as_str()),
+                &source,
+                config,
+                &mut report,
+            )?;
+            evaluate_unsafe_surface(
+                repository,
+                &base_commit,
+                path,
+                changed.renamed_from.get(path.as_str()),
+                changed.added_lines.get(path.as_str()),
+                &source,
+                config,
+                &mut report,
+            )?;
+        }
         let _manifest_path_count = changed.cargo_paths.len();
         let previous_path = changed.renamed_from.get(&file.path);
         for function in &file.functions {
@@ -325,19 +331,30 @@ pub(crate) fn check_mass(
         .any(|finding| finding.rule_id == "analysis-error")
     {
         let head_files = repository
-            .rust_files(&head_commit)?
+            .source_files(&head_commit)?
             .into_iter()
             .map(|path| {
                 repository
                     .read_blob(&head_commit, &path)
-                    .and_then(|source| analyze_rust_file(&path, &source))
+                    .and_then(|source| analyze_source_file(&path, &source))
             })
             .collect::<Result<Vec<_>>>()?;
         let policy = &config.rules.structural_erosion;
+        let rust_head_files = head_files
+            .iter()
+            .filter(|file| file.language == "rust")
+            .cloned()
+            .collect::<Vec<_>>();
+        let rust_base_files = artifact
+            .files
+            .iter()
+            .filter(|file| file.language == "rust")
+            .cloned()
+            .collect::<Vec<_>>();
         let head_summary =
-            RepositorySummary::from_files_with_cutoff(&head_files, policy.complexity_cutoff);
+            RepositorySummary::from_files_with_cutoff(&rust_head_files, policy.complexity_cutoff);
         let base_summary =
-            RepositorySummary::from_files_with_cutoff(&artifact.files, policy.complexity_cutoff);
+            RepositorySummary::from_files_with_cutoff(&rust_base_files, policy.complexity_cutoff);
         let delta = head_summary.erosion_ratio - base_summary.erosion_ratio;
         // The ratio alone cannot separate "added complexity" from "deleted
         // easy code": removing low-complexity code shrinks the denominator and
@@ -1640,7 +1657,9 @@ impl CloneIndex {
         for hash in &function.shingle_hashes {
             if let Some(ids) = self.by_shingle.get(hash) {
                 for id in ids {
-                    *overlap_counts.entry(*id).or_default() += 1;
+                    if self.candidates[*id].identity.language == function.identity.language {
+                        *overlap_counts.entry(*id).or_default() += 1;
+                    }
                 }
             }
         }
@@ -1662,6 +1681,7 @@ impl CloneIndex {
     ) -> Option<(FunctionRecord, f64, f64)> {
         let candidate = &self.candidates[id];
         if candidate.identity == function.identity
+            || candidate.identity.language != function.identity.language
             || candidate.sloc < policy.minimum_sloc
             || candidate.token_count < policy.minimum_tokens
         {

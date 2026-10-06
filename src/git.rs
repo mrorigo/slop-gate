@@ -95,12 +95,12 @@ impl GitRepository {
         Ok(commits)
     }
 
-    /// Lists Rust source paths tracked by one revision in stable Git order.
-    pub(crate) fn rust_files(&self, revision: &str) -> Result<Vec<String>> {
+    /// Lists supported source paths tracked by one revision in stable Git order.
+    pub(crate) fn source_files(&self, revision: &str) -> Result<Vec<String>> {
         let output = self.run_git(&["ls-tree", "-r", "--name-only", revision])?;
         Ok(output
             .lines()
-            .filter(|path| path.ends_with(".rs") && is_relative_path(path))
+            .filter(|path| is_supported_source_path(path))
             .map(String::from)
             .collect())
     }
@@ -114,19 +114,19 @@ impl GitRepository {
         self.run_git(&["show", &specification])
     }
 
-    /// Lists Rust files visible in the working tree, including untracked files.
-    pub(crate) fn working_tree_rust_files(&self, include_ignored: bool) -> Result<Vec<String>> {
+    /// Lists supported source files visible in the working tree.
+    pub(crate) fn working_tree_source_files(&self, include_ignored: bool) -> Result<Vec<String>> {
         let mut paths = self
             .run_git(&["ls-files", "--cached", "--others", "--exclude-standard"])?
             .lines()
-            .filter(|path| path.ends_with(".rs") && is_relative_path(path))
+            .filter(|path| is_supported_source_path(path))
             .map(String::from)
             .collect::<BTreeSet<_>>();
         if include_ignored {
             paths.extend(
                 self.run_git(&["ls-files", "--others", "--ignored", "--exclude-standard"])?
                     .lines()
-                    .filter(|path| path.ends_with(".rs") && is_relative_path(path))
+                    .filter(|path| is_supported_source_path(path))
                     .map(String::from),
             );
         }
@@ -173,7 +173,7 @@ impl GitRepository {
     }
 
     /// Returns changed head paths and rename mappings for `base..head`.
-    pub(crate) fn changed_rust_files(&self, base: &str, head: &str) -> Result<ChangedFiles> {
+    pub(crate) fn changed_source_files(&self, base: &str, head: &str) -> Result<ChangedFiles> {
         let output = self.run_git_bytes(&[
             "diff",
             "--name-status",
@@ -216,11 +216,7 @@ impl GitRepository {
                 })?;
                 if is_supported_changed_path(new_path) {
                     changed.push(new_path.to_string());
-                    if new_path.ends_with(".rs") {
-                        if status.starts_with('R') && old_path.ends_with(".rs") {
-                            renamed_from.insert(new_path.to_string(), old_path.to_string());
-                        }
-                    } else {
+                    if new_path.ends_with("Cargo.toml") {
                         cargo_paths.push(new_path.to_string());
                     }
                     if status.starts_with('R') && is_supported_changed_path(old_path) {
@@ -244,7 +240,7 @@ impl GitRepository {
         changed.dedup();
         cargo_paths.sort();
         cargo_paths.dedup();
-        changed.retain(|path| path.ends_with(".rs"));
+        changed.retain(|path| is_supported_source_path(path));
         let added_lines = changed
             .iter()
             .chain(cargo_paths.iter())
@@ -376,8 +372,15 @@ fn parse_diff_range(range: &str, line: &str) -> Result<(usize, usize)> {
     Ok((start, count))
 }
 
+fn is_supported_source_path(path: &str) -> bool {
+    is_relative_path(path)
+        && [".rs", ".py", ".ts", ".tsx"]
+            .iter()
+            .any(|extension| path.ends_with(extension))
+}
+
 fn is_supported_changed_path(path: &str) -> bool {
-    is_relative_path(path) && (path.ends_with(".rs") || path.ends_with("Cargo.toml"))
+    is_supported_source_path(path) || (is_relative_path(path) && path.ends_with("Cargo.toml"))
 }
 
 fn run_git(runner: &dyn GitRunner, directory: &Path, arguments: &[&str]) -> Result<String> {
@@ -482,9 +485,9 @@ mod tests {
         run_test_git(&path, &["commit", "--quiet", "-m", "base"]);
         let repository = GitRepository::open(&path).unwrap();
 
-        let visible = repository.working_tree_rust_files(false).unwrap();
+        let visible = repository.working_tree_source_files(false).unwrap();
         assert_eq!(visible, ["src/tracked.rs", "src/untracked.rs"]);
-        let all = repository.working_tree_rust_files(true).unwrap();
+        let all = repository.working_tree_source_files(true).unwrap();
         assert_eq!(all, ["ignored.rs", "src/tracked.rs", "src/untracked.rs"]);
         fs::remove_dir_all(path).unwrap();
     }

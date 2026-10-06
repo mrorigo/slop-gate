@@ -121,6 +121,31 @@ revisions, and evaluating a distinct-duplicated-fragment signal. Treat both as
 exploratory until evidence shows they improve interpretation without confusing
 users.
 
+━━ Multi-language analysis: Python and TypeScript
+
+Expand source analysis to Python (`.py`) and TypeScript (`.ts`, `.tsx`) while
+keeping each language's extraction and complexity rules explicit. The first
+release supports named functions and methods for function-mass and same-language
+near-clone analysis. It excludes anonymous functions, arrow functions, and
+cross-language comparisons until their identities and boundaries are calibrated.
+
+── Acceptance criteria
+
+1. Each language has versioned node maps and extractor rules recorded in the
+   analyzer fingerprint. Parser errors reject that file's analysis rather than
+   yielding partial facts.
+2. Fixtures cover classes and scopes, nested functions, decorators or
+   modifiers, async functions, comments and literals, declarations without
+   bodies, and malformed syntax. TypeScript includes TSX source.
+3. Candidate matching remains within one language. Rust-only lint suppression,
+   unsafe-surface, and Cargo dependency rules run only on Rust and Cargo files.
+4. Baseline artifacts validate the supported language identifiers and reject
+   incompatible analyzer fingerprints. Git indexing, changed-file detection,
+   working-tree scans, and reports include all enabled source extensions.
+5. Calibrate extraction, complexity, clone positives, and clone negatives on
+   real Python and TypeScript repositories before recommending error severity.
+   Document unsupported syntax and skipped-file behavior.
+
 ## 0.3 enhancement plan: exploratory repository scanning
 
 Status: **complete**. This phase makes `scan` useful for local code-health
