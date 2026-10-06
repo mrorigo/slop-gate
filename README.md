@@ -10,6 +10,9 @@ baseline artifact from a trusted Git commit, then evaluates only changed Rust
 functions in the candidate commit. It runs locally, uses no model, and makes no
 network request during analysis.
 
+See the [user guide](docs/user/index.md) for installation, commands,
+configuration, rule behavior, and CI setup.
+
 ```text
 main commit ── slop-gate index ──► versioned baseline artifact
                                         │
