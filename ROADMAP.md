@@ -99,6 +99,28 @@ an error-capable gate only when the measured false-positive rate is at most
 3. General commutativity or statement-reordering rules.
 4. Cross-language structural matching.
 
+━━ Macro-aware clone mass
+
+An adopter measured a macro refactor that preserved duplicated match arms while
+reducing reported recoverable mass by 76%. The findings and severities remained
+unchanged, but the lower mass could make the change look like a substantial
+duplication reduction. The macro body was not included as a clone-family
+candidate, so moving repeated logic out of functions hid much of its mass.
+
+── Follow-up
+
+Add a regression fixture where repeated function matches are consolidated into
+a macro that retains the duplicated arms. Investigate whether macro definitions
+can be compared as clone candidates and whether repeated arms should contribute
+to recoverable mass. Ensure reports do not imply that duplicated logic was
+removed when it was moved into a macro. Document parser and false-positive
+limits before changing gate behavior.
+
+Consider also showing mass change alongside finding-count change when comparing
+revisions, and evaluating a distinct-duplicated-fragment signal. Treat both as
+exploratory until evidence shows they improve interpretation without confusing
+users.
+
 ## 0.3 enhancement plan: exploratory repository scanning
 
 Status: **complete**. This phase makes `scan` useful for local code-health
