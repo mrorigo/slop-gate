@@ -35,6 +35,15 @@ of code (SLOC) exclude blank and comment-only lines. Identifiers and literals
 are normalized before clone comparison, so a renamed copy still matches. Clone
 candidates must pass both normalized token and AST similarity thresholds.
 
+## Language support
+
+Slop Gate analyzes Rust, Python (`.py`), and TypeScript (`.ts`, `.tsx`). Python
+and TypeScript support function-mass checks and near-clone detection within the
+same language. Their metrics are newly introduced; keep their findings at
+warning severity until they have been calibrated on real repositories. See
+[Language support and limits](docs/user/rules.md#language-support) for the
+functions each analyzer records.
+
 ━━ How block detection works
 
 Whole-function similarity dilutes as functions grow: a byte-identical 30-line
