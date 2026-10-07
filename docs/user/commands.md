@@ -20,7 +20,8 @@ See [Configuration](configuration.md).
 
 ## `index`
 
-Analyze supported source files at a Git revision and write a versioned JSON baseline artifact:
+Analyze supported source files at a Git revision. Write a versioned JSON
+baseline artifact:
 
 ```sh
 slop-gate index --ref origin/main --output .slop-gate/main.json
@@ -44,7 +45,10 @@ Required options:
 - `--index`: baseline artifact path.
 - `--format`: `human` (default), `json`, or `sarif`.
 
-The artifact must match the resolved base commit, analyzer version, and active policy. `check` evaluates changed Rust, Python, and TypeScript files, plus relevant Cargo manifest changes. See [Rules](rules.md) and [Results and CI](results-and-ci.md).
+The artifact must match the resolved base commit, analyzer version, and active
+policy. `check` evaluates changed Rust, Python, and TypeScript files. It also
+checks relevant Cargo manifest changes. See [Rules](rules.md) and [Results and
+CI](results-and-ci.md).
 
 ## `scan`
 

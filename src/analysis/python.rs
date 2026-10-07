@@ -87,6 +87,9 @@ fn collect_functions(
     output: &mut Vec<FunctionRecord>,
 ) -> Result<()> {
     if node.kind() == "function_definition" {
+        if is_overload_stub(node, source) {
+            return Ok(());
+        }
         let name_node = node
             .child_by_field_name("name")
             .ok_or_else(|| Error::invalid("Python function", "missing declared name"))?;
@@ -120,6 +123,55 @@ fn collect_functions(
     Ok(())
 }
 
+fn is_overload_stub(node: Node<'_>, source: &str) -> bool {
+    let Some(parent) = node
+        .parent()
+        .filter(|parent| parent.kind() == "decorated_definition")
+    else {
+        return false;
+    };
+    let mut cursor = parent.walk();
+    parent
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "decorator")
+        .filter_map(|decorator| source.get(decorator.byte_range()))
+        .any(|decorator| {
+            decorator
+                .trim()
+                .strip_prefix('@')
+                .and_then(|name| name.split('(').next())
+                .and_then(|name| name.rsplit('.').next())
+                == Some("overload")
+        })
+}
+
+fn descriptor_kind(node: Node<'_>, source: &str) -> Option<&'static str> {
+    let parent = node
+        .parent()
+        .filter(|parent| parent.kind() == "decorated_definition")?;
+    let mut cursor = parent.walk();
+    parent
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "decorator")
+        .filter_map(|decorator| source.get(decorator.byte_range()))
+        .find_map(|decorator| {
+            let name = decorator
+                .trim()
+                .strip_prefix('@')?
+                .split('(')
+                .next()?
+                .rsplit('.')
+                .next()?;
+            match name {
+                "property" => Some("property"),
+                "getter" => Some("getter"),
+                "setter" => Some("setter"),
+                "deleter" => Some("deleter"),
+                _ => None,
+            }
+        })
+}
+
 #[derive(Clone)]
 struct Item {
     text: String,
@@ -137,7 +189,7 @@ fn make_record(
     normalized(node, source, true, false, &mut tokens)?;
     let mut ast = Vec::new();
     normalized(node, source, true, true, &mut ast)?;
-    let cc = complexity(node, true);
+    let cc = complexity(node, true, source);
     let sloc = physical_sloc(node, source);
     let token_strings = tokens
         .iter()
@@ -155,6 +207,7 @@ fn make_record(
     let mut ast_unique = ast_sequence.clone();
     ast_unique.sort_unstable();
     ast_unique.dedup();
+    let descriptor_kind = descriptor_kind(node, source);
     let role = if name.starts_with("test_")
         || path.split('/').any(|part| {
             part == "tests"
@@ -163,14 +216,22 @@ fn make_record(
                 || part.ends_with("_test.py")
         }) {
         FunctionRole::Test
+    } else if descriptor_kind.is_some() && cc == 1 {
+        FunctionRole::Accessor
     } else {
         FunctionRole::General
     };
+    let mut qualified = scopes.to_vec();
+    if let Some(last) = qualified.last_mut()
+        && let Some(kind) = descriptor_kind
+    {
+        *last = format!("{name}@{kind}");
+    }
     Ok(FunctionRecord {
         identity: FunctionIdentity {
             language: LANGUAGE.to_string(),
             path: path.to_string(),
-            qualified_name: scopes.join("."),
+            qualified_name: qualified.join("."),
             kind: FunctionKind::Function,
         },
         name: name.to_string(),
@@ -204,7 +265,7 @@ fn normalized(
     output: &mut Vec<Item>,
 ) -> Result<()> {
     if (!root
-        && (matches!(node.kind(), "function_definition" | "lambda")
+        && (node.kind() == "function_definition"
             || (node.kind() == "decorated_definition" && has_function_definition(node))))
         || node.kind() == "comment"
     {
@@ -251,7 +312,7 @@ fn normalized(
     Ok(())
 }
 
-fn complexity(node: Node<'_>, root: bool) -> u32 {
+fn complexity(node: Node<'_>, root: bool, source: &str) -> u32 {
     if !root
         && (node.kind() == "function_definition"
             || (node.kind() == "decorated_definition" && has_function_definition(node)))
@@ -266,14 +327,27 @@ fn complexity(node: Node<'_>, root: bool) -> u32 {
             | "while_statement"
             | "except_clause"
             | "conditional_expression"
+            | "for_in_clause"
+            | "if_clause"
             | "and"
             | "or"
     ));
+    if node.kind() == "case_clause" && !is_wildcard_case(node, source) {
+        value += 1;
+    }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        value += complexity(child, false);
+        value += complexity(child, false, source);
     }
     if root { value + 1 } else { value }
+}
+
+fn is_wildcard_case(node: Node<'_>, source: &str) -> bool {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .find(|child| child.kind() == "case_pattern")
+        .and_then(|pattern| source.get(pattern.byte_range()))
+        .is_some_and(|pattern| pattern.trim() == "_")
 }
 
 fn shingles(tokens: &[&str]) -> Vec<u32> {
@@ -372,4 +446,121 @@ fn node_text<'a>(node: Node<'_>, source: &'a str) -> Result<&'a str> {
             subject: "Tree-sitter node range",
             detail: error.to_string(),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::analyze_python_file;
+
+    #[test]
+    fn extracts_fixture_scopes_async_functions_and_metrics() {
+        let source = include_str!("../../tests/fixtures/python_analysis.py");
+        let file = analyze_python_file("tests/fixtures/python_analysis.py", source).unwrap();
+        assert_eq!(file.language, "python");
+        assert_eq!(
+            file.functions
+                .iter()
+                .map(|function| function.identity.qualified_name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Worker.run",
+                "Worker.run.nested",
+                "test_plain",
+                "decorated",
+                "match_value",
+                "comprehension",
+                "parse_value",
+                "NumberBox.value@property",
+                "NumberBox.value@setter"
+            ]
+        );
+        let method = &file.functions[0];
+        assert_eq!(method.name, "run");
+        assert_eq!(method.start_line, 2);
+        assert_eq!(method.cc, 4);
+        assert_eq!(method.sloc, 8);
+        assert_eq!(method.mass, 4.0 * 8.0_f64.sqrt());
+        assert!(method.ast_node_count > 0);
+        assert!(method.token_count > 0);
+        assert!(!method.shingle_hashes.is_empty());
+        assert_eq!(file.functions[1].sloc, 2);
+        assert_eq!(file.functions[2].role.name(), "test");
+        assert_eq!(file.functions[3].start_line, 21);
+        assert_eq!(file.functions[4].cc, 2);
+        assert_eq!(file.functions[5].cc, 3);
+        assert_eq!(
+            file.functions
+                .iter()
+                .filter(|function| function.name == "parse_value")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn property_getter_and_setter_have_distinct_identities() {
+        let source = "class NumberBox:\n    @property\n    def value(self):\n        return self._value\n\n    @value.setter\n    def value(self, value):\n        self._value = value\n";
+        let file = analyze_python_file("src/model.py", source).unwrap();
+
+        assert_eq!(
+            file.functions
+                .iter()
+                .map(|function| function.identity.qualified_name.as_str())
+                .collect::<Vec<_>>(),
+            ["NumberBox.value@property", "NumberBox.value@setter"]
+        );
+        assert!(
+            file.functions
+                .iter()
+                .all(|function| function.role.name() == "accessor")
+        );
+    }
+
+    #[test]
+    fn ignores_comments_and_literal_values_in_fingerprints() {
+        let first =
+            analyze_python_file("src/a.py", "def f(value):\n    return value + 1\n").unwrap();
+        let second = analyze_python_file(
+            "src/a.py",
+            "def f(other): # a trailing comment\n    return other + 999\n",
+        )
+        .unwrap();
+        assert_eq!(
+            first.functions[0].normalized_hash,
+            second.functions[0].normalized_hash
+        );
+        assert_eq!(first.functions[0].ast_hash, second.functions[0].ast_hash);
+    }
+
+    #[test]
+    fn lambda_conditional_contributes_to_parent_metrics() {
+        let plain =
+            analyze_python_file("src/a.py", "def map_value(value):\n    return value\n").unwrap();
+        let with_lambda = analyze_python_file(
+            "src/a.py",
+            "def map_value(value):\n    mapper = lambda item: 1 if item else 0\n    return mapper(value)\n",
+        )
+        .unwrap();
+        let plain = &plain.functions[0];
+        let with_lambda = &with_lambda.functions[0];
+        assert_eq!(with_lambda.cc, plain.cc + 1);
+        assert_eq!(with_lambda.sloc, plain.sloc + 1);
+        assert_ne!(with_lambda.ast_hash, plain.ast_hash);
+        assert_ne!(with_lambda.normalized_hash, plain.normalized_hash);
+        assert!(with_lambda.token_count > plain.token_count);
+    }
+
+    #[test]
+    fn rejects_syntax_errors_and_invalid_paths() {
+        assert!(analyze_python_file("broken.py", "def broken(:\n").is_err());
+        assert!(analyze_python_file("/tmp/broken.py", "def valid(): pass\n").is_err());
+    }
+
+    #[test]
+    fn repeated_analysis_is_deterministic() {
+        let source = include_str!("../../tests/fixtures/python_analysis.py");
+        let first = analyze_python_file("pkg/module.py", source).unwrap();
+        let second = analyze_python_file("pkg/module.py", source).unwrap();
+        assert_eq!(first, second);
+    }
 }

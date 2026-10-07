@@ -105,6 +105,15 @@ impl GitRepository {
             .collect())
     }
 
+    /// Lists Rust source paths tracked by one revision in stable Git order.
+    pub(crate) fn rust_source_files(&self, revision: &str) -> Result<Vec<String>> {
+        Ok(self
+            .source_files(revision)?
+            .into_iter()
+            .filter(|path| path.ends_with(".rs"))
+            .collect())
+    }
+
     /// Reads a UTF-8 blob from a revision and repository-relative path.
     pub(crate) fn read_blob(&self, revision: &str, path: &str) -> Result<String> {
         if !is_relative_path(path) {
@@ -476,19 +485,59 @@ mod tests {
         fs::create_dir_all(path.join("src")).unwrap();
         fs::write(path.join("src/tracked.rs"), "fn tracked() {}\n").unwrap();
         fs::write(path.join("src/untracked.rs"), "fn untracked() {}\n").unwrap();
-        fs::write(path.join(".gitignore"), "ignored.rs\n").unwrap();
-        fs::write(path.join("ignored.rs"), "fn ignored() {}\n").unwrap();
+        fs::write(path.join("src/tool.py"), "def tool(): pass\n").unwrap();
+        fs::write(path.join("src/app.ts"), "function app() {}\n").unwrap();
+        fs::write(
+            path.join("src/view.tsx"),
+            "function view() { return <div />; }\n",
+        )
+        .unwrap();
+        fs::write(path.join("src/ignored.rs"), "fn ignored() {}\n").unwrap();
+        fs::write(path.join(".gitignore"), "src/ignored.rs\n").unwrap();
         run_test_git(&path, &["init", "--quiet"]);
         run_test_git(&path, &["config", "user.email", "test@example.invalid"]);
         run_test_git(&path, &["config", "user.name", "Slop Gate Test"]);
-        run_test_git(&path, &["add", "src/tracked.rs", ".gitignore"]);
+        run_test_git(
+            &path,
+            &[
+                "add",
+                "src/tracked.rs",
+                "src/tool.py",
+                "src/app.ts",
+                ".gitignore",
+            ],
+        );
         run_test_git(&path, &["commit", "--quiet", "-m", "base"]);
         let repository = GitRepository::open(&path).unwrap();
 
+        assert_eq!(
+            repository.source_files("HEAD").unwrap(),
+            ["src/app.ts", "src/tool.py", "src/tracked.rs"]
+        );
+
         let visible = repository.working_tree_source_files(false).unwrap();
-        assert_eq!(visible, ["src/tracked.rs", "src/untracked.rs"]);
+        assert_eq!(
+            visible,
+            [
+                "src/app.ts",
+                "src/tool.py",
+                "src/tracked.rs",
+                "src/untracked.rs",
+                "src/view.tsx"
+            ]
+        );
         let all = repository.working_tree_source_files(true).unwrap();
-        assert_eq!(all, ["ignored.rs", "src/tracked.rs", "src/untracked.rs"]);
+        assert_eq!(
+            all,
+            [
+                "src/app.ts",
+                "src/ignored.rs",
+                "src/tool.py",
+                "src/tracked.rs",
+                "src/untracked.rs",
+                "src/view.tsx"
+            ]
+        );
         fs::remove_dir_all(path).unwrap();
     }
 

@@ -372,7 +372,7 @@ mod tests {
         analyzer_fingerprint_with_policy, tool_version,
     };
     use crate::analysis::RepositorySummary;
-    use crate::analysis::analyze_rust_file;
+    use crate::analysis::{analyze_python_file, analyze_rust_file, analyze_typescript_file};
 
     #[test]
     fn artifact_round_trip_is_valid() {
@@ -381,6 +381,28 @@ mod tests {
         let encoded = artifact.to_json().unwrap();
         assert_eq!(artifact.to_json().unwrap(), encoded);
         assert_eq!(IndexArtifact::from_json(&encoded).unwrap(), artifact);
+    }
+
+    #[test]
+    fn multi_language_artifact_round_trip_is_valid() {
+        let python =
+            analyze_python_file("src/worker.py", "def run(value):\n    return value\n").unwrap();
+        let typescript =
+            analyze_typescript_file("src/view.tsx", "function View() { return <div />; }\n")
+                .unwrap();
+        let artifact = IndexArtifact::new("c".repeat(40), vec![python, typescript]).unwrap();
+        let encoded = artifact.to_json().unwrap();
+
+        assert_eq!(IndexArtifact::from_json(&encoded).unwrap(), artifact);
+    }
+
+    #[test]
+    fn artifact_rejects_a_function_identity_from_another_language() {
+        let mut file =
+            analyze_python_file("src/worker.py", "def run(value):\n    return value\n").unwrap();
+        file.functions[0].identity.language = "typescript".to_string();
+
+        assert!(IndexArtifact::new("c".repeat(40), vec![file]).is_err());
     }
 
     #[test]

@@ -23,7 +23,7 @@ pub struct FunctionIdentity {
     pub language: String,
     /// Repository-relative declaration path.
     pub path: String,
-    /// Lexical module, trait, and implementation scopes followed by the name.
+    /// Language-specific lexical scopes followed by the declared name.
     pub qualified_name: String,
     /// The declaration category.
     pub kind: FunctionKind,

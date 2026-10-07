@@ -109,7 +109,7 @@ fn collect_functions(
     if matches!(node.kind(), "function_declaration" | "method_definition")
         && node.child_by_field_name("body").is_some()
     {
-        result.push(record_function(node, source, path, scopes)?);
+        result.push(record_function(node, source, path, &child_scopes)?);
         let mut nested_scopes = child_scopes;
         if let Some(name) = node.child_by_field_name("name") {
             nested_scopes.push(text(name, source)?.to_string());
@@ -137,7 +137,11 @@ fn record_function(
         .ok_or_else(|| Error::invalid("TypeScript function", "is missing a name"))?;
     let name = text(name_node, source)?.to_string();
     let mut qualified = scopes.to_vec();
-    qualified.push(name.clone());
+    let accessor_kind = method_accessor_kind(node, source);
+    qualified.push(match accessor_kind {
+        Some(kind) => format!("{kind} {name}"),
+        None => name.clone(),
+    });
     let tokens = normalized_tokens(node, source, true)?;
     let ast = normalized_ast(node, source, true)?;
     let token_text = tokens
@@ -153,7 +157,7 @@ fn record_function(
     let cc = cyclomatic_complexity(node);
     let sloc = physical_sloc(node, source);
     let start_line = node.start_position().row + 1;
-    let role = classify_role(&name, path, scopes, cc);
+    let role = classify_role(&name, path, scopes, cc, accessor_kind.is_some());
     Ok(FunctionRecord {
         identity: FunctionIdentity {
             language: LANGUAGE_NAME.to_string(),
@@ -258,9 +262,22 @@ fn text<'a>(node: Node<'_>, source: &'a str) -> Result<&'a str> {
         .ok_or_else(|| Error::invalid("TypeScript source range", "is not valid UTF-8"))
 }
 
+fn method_accessor_kind(node: Node<'_>, source: &str) -> Option<&'static str> {
+    if node.kind() != "method_definition" {
+        return None;
+    }
+    let name = node.child_by_field_name("name")?;
+    let prefix = source.get(node.start_byte()..name.start_byte())?;
+    match prefix.split_whitespace().last()? {
+        "get" => Some("get"),
+        "set" => Some("set"),
+        _ => None,
+    }
+}
+
 fn physical_sloc(node: Node<'_>, source: &str) -> usize {
-    let mut comments = Vec::new();
-    collect_comment_ranges(node, true, &mut comments);
+    let mut omitted_ranges = Vec::new();
+    collect_omitted_ranges(node, true, &mut omitted_ranges);
     let start = node.start_byte();
     let end = node.end_byte();
     let bytes = source.as_bytes();
@@ -271,7 +288,7 @@ fn physical_sloc(node: Node<'_>, source: &str) -> usize {
             .iter()
             .position(|byte| *byte == b'\n')
             .map_or(end, |offset| line_start + offset);
-        if line_has_code(&bytes[line_start..line_end], line_start, &comments) {
+        if line_has_code(&bytes[line_start..line_end], line_start, &omitted_ranges) {
             count += 1;
         }
         line_start = line_end.saturating_add(1);
@@ -279,24 +296,25 @@ fn physical_sloc(node: Node<'_>, source: &str) -> usize {
     count
 }
 
-fn collect_comment_ranges(node: Node<'_>, is_root: bool, comments: &mut Vec<(usize, usize)>) {
+fn collect_omitted_ranges(node: Node<'_>, is_root: bool, ranges: &mut Vec<(usize, usize)>) {
     if !is_root && matches!(node.kind(), "function_declaration" | "method_definition") {
+        ranges.push((node.start_byte(), node.end_byte()));
         return;
     }
     if matches!(node.kind(), "comment" | "line_comment" | "block_comment") {
-        comments.push((node.start_byte(), node.end_byte()));
+        ranges.push((node.start_byte(), node.end_byte()));
         return;
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        collect_comment_ranges(child, false, comments);
+        collect_omitted_ranges(child, false, ranges);
     }
 }
 
-fn line_has_code(line: &[u8], absolute_start: usize, comments: &[(usize, usize)]) -> bool {
+fn line_has_code(line: &[u8], absolute_start: usize, omitted_ranges: &[(usize, usize)]) -> bool {
     line.iter().enumerate().any(|(offset, byte)| {
         !byte.is_ascii_whitespace()
-            && !comments.iter().any(|(start, end)| {
+            && !omitted_ranges.iter().any(|(start, end)| {
                 let position = absolute_start + offset;
                 *start <= position && position < *end
             })
@@ -381,7 +399,13 @@ fn cyclomatic_complexity(node: Node<'_>) -> u32 {
     cc
 }
 
-fn classify_role(name: &str, path: &str, scopes: &[String], cc: u32) -> FunctionRole {
+fn classify_role(
+    name: &str,
+    path: &str,
+    scopes: &[String],
+    cc: u32,
+    is_accessor: bool,
+) -> FunctionRole {
     if scopes
         .iter()
         .any(|scope| scope == "test" || scope == "tests")
@@ -391,11 +415,141 @@ fn classify_role(name: &str, path: &str, scopes: &[String], cc: u32) -> Function
         || name.starts_with("test")
     {
         FunctionRole::Test
-    } else if cc == 1 && (name == "get" || name.starts_with("get_")) {
+    } else if cc == 1 && (is_accessor || name == "get" || name.starts_with("get_")) {
         FunctionRole::Accessor
-    } else if cc <= 3 && (name == "new" || name.starts_with("create") || name.starts_with("from")) {
+    } else if cc <= 3
+        && (name == "constructor"
+            || name == "new"
+            || name.starts_with("create")
+            || name.starts_with("from"))
+    {
         FunctionRole::Constructor
     } else {
         FunctionRole::General
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::analyze_typescript_file;
+
+    const TYPESCRIPT_FIXTURE: &str = include_str!("../../tests/fixtures/typescript/functions.ts");
+    const TSX_FIXTURE: &str = include_str!("../../tests/fixtures/typescript/component.tsx");
+
+    #[test]
+    fn extracts_named_functions_methods_and_nested_scopes() {
+        let file = analyze_typescript_file("src/functions.ts", TYPESCRIPT_FIXTURE).unwrap();
+        assert_eq!(
+            file.functions
+                .iter()
+                .map(|function| function.identity.qualified_name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "choose",
+                "choose::nested",
+                "overload",
+                "Box::getValue",
+                "Box::setValue"
+            ]
+        );
+    }
+
+    #[test]
+    fn counts_complexity_and_physical_sloc_without_comments_or_nested_bodies() {
+        let file = analyze_typescript_file("src/functions.ts", TYPESCRIPT_FIXTURE).unwrap();
+        let choose = file
+            .functions
+            .iter()
+            .find(|function| function.identity.qualified_name == "choose")
+            .unwrap();
+        assert_eq!((choose.cc, choose.sloc), (3, 6));
+        let nested = file
+            .functions
+            .iter()
+            .find(|function| function.identity.qualified_name == "choose::nested")
+            .unwrap();
+        assert_eq!((nested.cc, nested.sloc), (1, 3));
+        let setter = file
+            .functions
+            .iter()
+            .find(|function| function.identity.qualified_name == "Box::setValue")
+            .unwrap();
+        assert_eq!((setter.cc, setter.sloc), (2, 5));
+    }
+
+    #[test]
+    fn arrow_functions_contribute_to_the_enclosing_function() {
+        let source = "function apply(value: number) {\n  const transform = (input: number) => {\n    if (input > 0) return input;\n    return 0;\n  };\n  return transform(value);\n}\n";
+        let file = analyze_typescript_file("src/apply.ts", source).unwrap();
+        assert_eq!(file.functions.len(), 1);
+        assert_eq!(file.functions[0].cc, 2);
+        assert_eq!(file.functions[0].sloc, 7);
+    }
+
+    #[test]
+    fn getter_and_setter_identities_do_not_collide() {
+        let source = "class Cache {\n  private value = 0;\n  constructor(value: number) { this.value = value; }\n  get item() { return this.value; }\n  set item(value: number) { this.value = value; }\n}\n";
+        let file = analyze_typescript_file("src/cache.ts", source).unwrap();
+        let identities = file
+            .functions
+            .iter()
+            .map(|function| function.identity.qualified_name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            identities,
+            ["Cache::constructor", "Cache::get item", "Cache::set item"]
+        );
+        assert_eq!(file.functions[0].role.name(), "constructor");
+        assert_eq!(file.functions[1].role.name(), "accessor");
+        assert_eq!(file.functions[2].role.name(), "accessor");
+    }
+
+    #[test]
+    fn parses_tsx_and_records_named_function() {
+        let file = analyze_typescript_file("src/component.tsx", TSX_FIXTURE).unwrap();
+        assert_eq!(file.language, "typescript");
+        assert_eq!(file.functions.len(), 1);
+        assert_eq!(file.functions[0].identity.qualified_name, "Greeting");
+        assert!(file.functions[0].token_count > 0);
+    }
+
+    #[test]
+    fn ignores_overload_signatures_and_rejects_syntax_errors() {
+        let file = analyze_typescript_file("src/functions.ts", TYPESCRIPT_FIXTURE).unwrap();
+        assert_eq!(
+            file.functions
+                .iter()
+                .filter(|function| function.name == "overload")
+                .count(),
+            1
+        );
+        assert!(analyze_typescript_file("src/broken.ts", "function broken( {\n").is_err());
+    }
+
+    #[test]
+    fn analysis_output_is_deterministic() {
+        let first = analyze_typescript_file("src/functions.ts", TYPESCRIPT_FIXTURE).unwrap();
+        let second = analyze_typescript_file("src/functions.ts", TYPESCRIPT_FIXTURE).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn normalized_signals_ignore_comments_identifiers_and_literal_values() {
+        let first = analyze_typescript_file(
+            "src/one.ts",
+            "function render(value: string) { return value === 'alpha'; }\n",
+        )
+        .unwrap();
+        let second = analyze_typescript_file(
+            "src/two.ts",
+            "// a comment\nfunction render(input: string) { return input === 'beta'; }\n",
+        )
+        .unwrap();
+        assert_eq!(
+            first.functions[0].normalized_hash,
+            second.functions[0].normalized_hash
+        );
+        assert_eq!(first.functions[0].ast_hash, second.functions[0].ast_hash);
     }
 }

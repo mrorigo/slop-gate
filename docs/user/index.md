@@ -1,6 +1,9 @@
 # Slop Gate user guide
 
-Slop Gate is a deterministic, local analysis tool for Rust, Python, and TypeScript repositories. It helps teams review changes that add large or complex functions, duplicate existing code, expand unsafe or lint-suppression surface, or increase production dependencies. It can also scan a repository for existing duplication and track structural erosion across Git history.
+Slop Gate is a deterministic, local analysis tool for Rust, Python, and
+TypeScript repositories. It helps teams review large or complex functions and
+structural duplication. Rust rules also track unsafe and lint-suppression
+surface, dependency changes, and structural erosion.
 
 Analysis runs without a model or network access. The `check` command compares a candidate Git revision with an indexed baseline; `scan` and `history` provide repository-level views.
 
@@ -24,4 +27,9 @@ See [Getting started](getting-started.md) for commands and [Results and CI](resu
 
 ## Scope
 
-Rust has the full rule set. Python and TypeScript currently support named function and method analysis for function-mass and same-language near-clone findings; their metrics need calibration before teams rely on error severity. Slop Gate complements formatting, compiler, lint, and dependency-audit checks; it does not prove semantic equivalence or assess security. See [Rules](rules.md) and [Results and CI](results-and-ci.md) for the measurements and limits.
+Rust has the full rule set. Python and TypeScript support named functions and
+methods for `function-mass` and same-language `near-clone` findings. Calibrate
+their metrics before relying on error severity. Slop Gate complements formatting,
+compiler, lint, and dependency-audit checks. It does not prove semantic
+equivalence or assess security. See [Rules](rules.md) and [Results and CI](results-and-ci.md)
+for measurement details and limits.

@@ -123,11 +123,16 @@ users.
 
 ━━ Multi-language analysis: Python and TypeScript
 
+Status: extractor integration and fixture coverage are complete. Real-repository
+calibration remains before recommending error severity.
+
 Expand source analysis to Python (`.py`) and TypeScript (`.ts`, `.tsx`) while
 keeping each language's extraction and complexity rules explicit. The first
 release supports named functions and methods for function-mass and same-language
-near-clone analysis. It excludes anonymous functions, arrow functions, and
-cross-language comparisons until their identities and boundaries are calibrated.
+near-clone analysis. Lambdas, arrows, and other nested function expressions
+contribute to their enclosing function but do not get independent records.
+Top-level function expressions are not analyzed. Cross-language comparisons
+remain out of scope.
 
 ── Acceptance criteria
 

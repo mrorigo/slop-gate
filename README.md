@@ -117,11 +117,14 @@ cargo run --release -- --help
 ```
 
 Slop Gate analyzes Rust, Python, and TypeScript (including TSX). Python and
-TypeScript analysis currently extracts named functions and methods; anonymous
-functions, lambdas, and arrow functions are not independent records. Clone
-matching compares functions only within the same language. Python and
-TypeScript metrics are newly introduced and should remain warning-level until
-they have been calibrated on real repositories.
+TypeScript analysis extracts named `def` and `function` declarations, class
+methods, and nested named functions. Python `@overload` stubs and TypeScript
+overload signatures without bodies are skipped. Lambdas, arrows, and other
+nested function expressions contribute to an extracted enclosing function but
+do not get independent records. Top-level function expressions are not
+analyzed. Clone matching compares functions only within the same language. Keep
+Python and TypeScript metrics at warning severity until real repositories have
+been calibrated.
 
 Rust parsing uses `tree-sitter-rust-orchard`, including its fix for valid
 macro-rule patterns that use the `~` token. Slop Gate rejects Rust files with
