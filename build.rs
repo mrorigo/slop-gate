@@ -1,5 +1,5 @@
 // Rust guideline compliant 2026-09-27
-//! Emits a content fingerprint of the analyzer sources.
+//! Emits a content fingerprint of the analyzer sources and parser dependencies.
 //!
 //! The fingerprint is mixed into the index-artifact compatibility key so a
 //! change to extraction, normalization, or summarization invalidates artifacts
@@ -12,8 +12,12 @@
 
 use std::path::Path;
 
-const ANALYZER_SOURCES: [&str; 4] = [
+const ANALYZER_INPUTS: [&str; 8] = [
+    "Cargo.toml",
+    "Cargo.lock",
     "src/analysis/extract.rs",
+    "src/analysis/python.rs",
+    "src/analysis/typescript.rs",
     "src/analysis/model.rs",
     "src/analysis/artifact.rs",
     "src/analysis/mod.rs",
@@ -24,11 +28,11 @@ const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 fn main() {
     let mut hash = FNV_OFFSET;
-    for source in ANALYZER_SOURCES {
-        println!("cargo::rerun-if-changed={source}");
-        let contents = std::fs::read(Path::new(source))
-            .unwrap_or_else(|error| panic!("failed to read analyzer source {source}: {error}"));
-        hash = absorb(hash, source.as_bytes());
+    for input in ANALYZER_INPUTS {
+        println!("cargo::rerun-if-changed={input}");
+        let contents = std::fs::read(Path::new(input))
+            .unwrap_or_else(|error| panic!("failed to read analyzer input {input}: {error}"));
+        hash = absorb(hash, input.as_bytes());
         hash = absorb(hash, &[0]);
         hash = absorb(hash, &contents);
         hash = absorb(hash, &[0]);

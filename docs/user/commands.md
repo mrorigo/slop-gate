@@ -20,7 +20,8 @@ See [Configuration](configuration.md).
 
 ## `index`
 
-Analyze Rust files at a Git revision and write a versioned JSON baseline artifact:
+Analyze supported source files at a Git revision. Write a versioned JSON
+baseline artifact:
 
 ```sh
 slop-gate index --ref origin/main --output .slop-gate/main.json
@@ -44,7 +45,10 @@ Required options:
 - `--index`: baseline artifact path.
 - `--format`: `human` (default), `json`, or `sarif`.
 
-The artifact must match the resolved base commit, analyzer version, and active policy. `check` evaluates changed Rust files and relevant manifest changes. See [Rules](rules.md) and [Results and CI](results-and-ci.md).
+The artifact must match the resolved base commit, analyzer version, and active
+policy. `check` evaluates changed Rust, Python, and TypeScript files. It also
+checks relevant Cargo manifest changes. See [Rules](rules.md) and [Results and
+CI](results-and-ci.md).
 
 ## `scan`
 
@@ -59,7 +63,7 @@ slop-gate scan --working-tree --path src --top 20
 Options:
 
 - `--ref REV`: scan a Git revision; defaults to `HEAD` and conflicts with `--working-tree`.
-- `--working-tree`: include local edits and untracked, non-ignored Rust files.
+- `--working-tree`: include local edits and untracked, non-ignored supported source files.
 - `--path PATH`: restrict by file or directory; repeat to select multiple paths.
 - `--no-ignore`: include Git-ignored files.
 - `--threshold 0.0..=1.0`: override the near-clone similarity threshold for this scan.

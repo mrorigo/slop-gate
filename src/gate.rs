@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::analysis::{
     FunctionIdentity, FunctionRecord, FunctionRole, IndexArtifact, RepositorySummary, SHINGLE_SIZE,
-    analyze_rust_file, analyzer_fingerprint, analyzer_fingerprint_with_policy,
+    analyze_rust_file, analyze_source_file, analyzer_fingerprint, analyzer_fingerprint_with_policy,
 };
 use crate::analysis::{dependency_edges, lint_suppressions, unsafe_surface};
 use crate::config::{GateConfig, NearCloneRule, RuleSeverity};
@@ -61,16 +61,16 @@ impl CheckReport {
     }
 }
 
-/// Builds a complete Rust baseline artifact from one resolved revision.
+/// Builds a complete multi-language baseline artifact from one resolved revision.
 pub(crate) fn build_artifact(repository: &GitRepository, revision: &str) -> Result<IndexArtifact> {
     let commit = repository.resolve_revision(revision)?;
     let files = repository
-        .rust_files(&commit)?
+        .source_files(&commit)?
         .into_iter()
         .map(|path| {
             repository.read_blob(&commit, &path).and_then(|source| {
-                analyze_rust_file(&path, &source)
-                    .map_err(|error| Error::invalid("Rust source", format!("{path}: {error}")))
+                analyze_source_file(&path, &source)
+                    .map_err(|error| Error::invalid("source file", format!("{path}: {error}")))
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -84,18 +84,18 @@ pub(crate) fn build_working_tree_artifact(
 ) -> Result<IndexArtifact> {
     let commit = repository.resolve_revision("HEAD")?;
     let files = repository
-        .working_tree_rust_files(include_ignored)?
+        .working_tree_source_files(include_ignored)?
         .into_iter()
         .map(|path| {
             repository
                 .read_working_tree(&path)
-                .and_then(|source| analyze_rust_file(&path, &source))
+                .and_then(|source| analyze_source_file(&path, &source))
         })
         .collect::<Result<Vec<_>>>()?;
     IndexArtifact::new(commit, files)
 }
 
-/// Computes repository summaries for several cutoffs with one source analysis.
+/// Computes Rust repository summaries for several cutoffs with one source analysis.
 pub(crate) fn summarize_revision_with_cutoffs(
     repository: &GitRepository,
     revision: &str,
@@ -106,7 +106,7 @@ pub(crate) fn summarize_revision_with_cutoffs(
     }
     let commit = repository.resolve_revision(revision)?;
     let files = repository
-        .rust_files(&commit)?
+        .rust_source_files(&commit)?
         .into_iter()
         .map(|path| {
             repository.read_blob(&commit, &path).and_then(|source| {
@@ -155,7 +155,7 @@ pub(crate) fn check_mass(
     };
     artifact.validate_with_fingerprint(&expected_fingerprint)?;
     let head_commit = repository.resolve_revision(head)?;
-    let changed = repository.changed_rust_files(&base_commit, &head_commit)?;
+    let changed = repository.changed_source_files(&base_commit, &head_commit)?;
     let base_functions = artifact
         .files
         .iter()
@@ -170,7 +170,7 @@ pub(crate) fn check_mass(
     let mut head_files = HashMap::new();
     for path in &changed.paths {
         let source = repository.read_blob(&head_commit, path)?;
-        match analyze_rust_file(path, &source) {
+        match analyze_source_file(path, &source) {
             Ok(file) => {
                 head_files.insert(path.clone(), file);
             }
@@ -196,7 +196,7 @@ pub(crate) fn check_mass(
     }
 
     let head_paths = repository
-        .rust_files(&head_commit)?
+        .source_files(&head_commit)?
         .into_iter()
         .collect::<HashSet<_>>();
     let changed_base_paths = changed
@@ -247,26 +247,28 @@ pub(crate) fn check_mass(
             continue;
         };
         let source = repository.read_blob(&head_commit, path)?;
-        evaluate_lint_suppressions(
-            repository,
-            &base_commit,
-            path,
-            changed.renamed_from.get(path.as_str()),
-            changed.added_lines.get(path.as_str()),
-            &source,
-            config,
-            &mut report,
-        )?;
-        evaluate_unsafe_surface(
-            repository,
-            &base_commit,
-            path,
-            changed.renamed_from.get(path.as_str()),
-            changed.added_lines.get(path.as_str()),
-            &source,
-            config,
-            &mut report,
-        )?;
+        if file.language == "rust" {
+            evaluate_lint_suppressions(
+                repository,
+                &base_commit,
+                path,
+                changed.renamed_from.get(path.as_str()),
+                changed.added_lines.get(path.as_str()),
+                &source,
+                config,
+                &mut report,
+            )?;
+            evaluate_unsafe_surface(
+                repository,
+                &base_commit,
+                path,
+                changed.renamed_from.get(path.as_str()),
+                changed.added_lines.get(path.as_str()),
+                &source,
+                config,
+                &mut report,
+            )?;
+        }
         let _manifest_path_count = changed.cargo_paths.len();
         let previous_path = changed.renamed_from.get(&file.path);
         for function in &file.functions {
@@ -324,8 +326,8 @@ pub(crate) fn check_mass(
         .iter()
         .any(|finding| finding.rule_id == "analysis-error")
     {
-        let head_files = repository
-            .rust_files(&head_commit)?
+        let rust_head_files = repository
+            .rust_source_files(&head_commit)?
             .into_iter()
             .map(|path| {
                 repository
@@ -334,10 +336,16 @@ pub(crate) fn check_mass(
             })
             .collect::<Result<Vec<_>>>()?;
         let policy = &config.rules.structural_erosion;
+        let rust_base_files = artifact
+            .files
+            .iter()
+            .filter(|file| file.language == "rust")
+            .cloned()
+            .collect::<Vec<_>>();
         let head_summary =
-            RepositorySummary::from_files_with_cutoff(&head_files, policy.complexity_cutoff);
+            RepositorySummary::from_files_with_cutoff(&rust_head_files, policy.complexity_cutoff);
         let base_summary =
-            RepositorySummary::from_files_with_cutoff(&artifact.files, policy.complexity_cutoff);
+            RepositorySummary::from_files_with_cutoff(&rust_base_files, policy.complexity_cutoff);
         let delta = head_summary.erosion_ratio - base_summary.erosion_ratio;
         // The ratio alone cannot separate "added complexity" from "deleted
         // easy code": removing low-complexity code shrinks the denominator and
@@ -363,7 +371,7 @@ pub(crate) fn check_mass(
                         cutoff.to_string(),
                         format!(
                             "{:.6}",
-                            RepositorySummary::from_files_with_cutoff(&head_files, *cutoff)
+                            RepositorySummary::from_files_with_cutoff(&rust_head_files, *cutoff)
                                 .erosion_ratio
                         ),
                     )
@@ -372,7 +380,7 @@ pub(crate) fn check_mass(
             push_if_enabled(
                 &mut report,
                 erosion_finding(ErosionFindingInput {
-                    head_files: &head_files,
+                    head_files: &rust_head_files,
                     base_functions: &base_functions,
                     renamed_from: &changed.renamed_from,
                     added_lines: &changed.added_lines,
@@ -1640,7 +1648,9 @@ impl CloneIndex {
         for hash in &function.shingle_hashes {
             if let Some(ids) = self.by_shingle.get(hash) {
                 for id in ids {
-                    *overlap_counts.entry(*id).or_default() += 1;
+                    if self.candidates[*id].identity.language == function.identity.language {
+                        *overlap_counts.entry(*id).or_default() += 1;
+                    }
                 }
             }
         }
@@ -1662,6 +1672,7 @@ impl CloneIndex {
     ) -> Option<(FunctionRecord, f64, f64)> {
         let candidate = &self.candidates[id];
         if candidate.identity == function.identity
+            || candidate.identity.language != function.identity.language
             || candidate.sloc < policy.minimum_sloc
             || candidate.token_count < policy.minimum_tokens
         {
@@ -1952,6 +1963,7 @@ fn push_if_enabled(report: &mut CheckReport, mut finding: Finding, config: &Gate
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -1961,7 +1973,9 @@ mod tests {
         CheckReport, CloneIndex, Severity, bind_policy, build_artifact, check_mass,
         limit_scan_report, mass_growth, scan_clones,
     };
-    use crate::analysis::{IndexArtifact, analyze_rust_file};
+    use crate::analysis::{
+        IndexArtifact, analyze_python_file, analyze_rust_file, analyze_typescript_file,
+    };
     use crate::config::GateConfig;
     use crate::git::GitRepository;
 
@@ -2045,6 +2059,64 @@ mod tests {
             1
         );
         assert!(!report.has_errors());
+    }
+
+    #[test]
+    fn indexes_and_checks_python_and_typescript_functions() {
+        let repository = TestRepository::new("fn rust_baseline() {}\n");
+        repository.commit_new_file(
+            "src/baseline.py",
+            "def python_baseline(value):\n    return value\n",
+        );
+        repository.commit_new_file(
+            "src/baseline.ts",
+            "function typescriptBaseline(value: string) { return value; }\n",
+        );
+        let git_repository = repository.repository();
+        let artifact = build_artifact(&git_repository, "HEAD").unwrap();
+        assert!(artifact.files.iter().any(|file| file.language == "python"));
+        assert!(
+            artifact
+                .files
+                .iter()
+                .any(|file| file.language == "typescript")
+        );
+
+        let python_body = (0..24)
+            .map(|_| "    if value:\n        pass\n")
+            .collect::<String>();
+        repository.commit_new_file(
+            "src/complex.py",
+            &format!("def complex_python(value):\n{python_body}"),
+        );
+        let typescript_body = (0..24).map(|_| "    if (value) {}\n").collect::<String>();
+        repository.commit_new_file(
+            "src/complex.ts",
+            &format!("function complexTypeScript(value: boolean) {{\n{typescript_body}}}\n"),
+        );
+
+        let report = check_mass(
+            &git_repository,
+            &artifact.repository_commit,
+            "HEAD",
+            &artifact,
+            &GateConfig::default(),
+        )
+        .unwrap();
+        let mass_paths = report
+            .findings
+            .iter()
+            .filter(|finding| finding.rule_id == "function-mass")
+            .map(|finding| finding.location.path.as_str())
+            .collect::<HashSet<_>>();
+        assert!(mass_paths.contains("src/complex.py"));
+        assert!(mass_paths.contains("src/complex.ts"));
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|finding| finding.rule_id == "analysis-error")
+        );
     }
 
     /// Returns a duplicated statement block long enough to clear the block floor.
@@ -3013,6 +3085,71 @@ mod tests {
                 .best_match(&subject, &config.rules.near_clone)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn clone_candidates_are_restricted_to_the_same_language() {
+        let mut candidate = analyze_rust_file("src/first.rs", &clone_function("first", "input"))
+            .unwrap()
+            .functions
+            .remove(0);
+        let mut subject = analyze_rust_file("src/second.rs", &clone_function("second", "value"))
+            .unwrap()
+            .functions
+            .remove(0);
+        candidate.identity.language = "python".to_string();
+        subject.identity.language = "typescript".to_string();
+        let index = CloneIndex::from_functions([candidate]);
+        let policy = &GateConfig::default().rules.near_clone;
+
+        assert!(index.candidate_ids(&subject).is_empty());
+        assert!(index.best_match(&subject, policy).is_none());
+        assert!(index.best_block_matches(&subject, policy).is_empty());
+    }
+
+    #[test]
+    fn scan_finds_clones_within_python_and_typescript() {
+        let python_clone = |name: &str, value: &str| {
+            let body = (0..16)
+                .map(|_| format!("    if {value}:\n        total = total + 1\n"))
+                .collect::<String>();
+            format!("def {name}({value}):\n    total = {value}\n{body}    return total\n")
+        };
+        let typescript_clone = |name: &str, value: &str| {
+            let body = (0..16)
+                .map(|_| format!("  if ({value}) {{ total = total + 1; }}\n"))
+                .collect::<String>();
+            format!(
+                "function {name}({value}: boolean) {{\n  let total = 0;\n{body}  return total;\n}}\n"
+            )
+        };
+        let files = vec![
+            analyze_python_file("src/first.py", &python_clone("first", "value")).unwrap(),
+            analyze_python_file("src/second.py", &python_clone("second", "input")).unwrap(),
+            analyze_typescript_file("src/first.ts", &typescript_clone("first", "value")).unwrap(),
+            analyze_typescript_file("src/second.ts", &typescript_clone("second", "input")).unwrap(),
+        ];
+        let artifact = IndexArtifact::new("d".repeat(40), files).unwrap();
+        let report = scan_clones(&artifact, &GateConfig::default());
+        let clone_pairs = report
+            .findings
+            .iter()
+            .filter(|finding| finding.rule_id == "near-clone")
+            .filter_map(|finding| {
+                finding
+                    .base_location
+                    .as_ref()
+                    .map(|base| (finding.location.path.as_str(), base.path.as_str()))
+            })
+            .collect::<Vec<_>>();
+
+        assert!(clone_pairs.len() >= 2);
+        assert!(clone_pairs.iter().all(|(left, right)| {
+            (left.ends_with(".py") && right.ends_with(".py"))
+                || (left.ends_with(".ts") && right.ends_with(".ts"))
+        }));
+        assert!(clone_pairs.iter().any(|(left, _)| left.ends_with(".py")));
+        assert!(clone_pairs.iter().any(|(left, _)| left.ends_with(".ts")));
     }
 
     #[test]

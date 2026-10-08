@@ -14,7 +14,7 @@ use super::{AnalyzedFile, RepositorySummary};
 /// roles required by block-level duplicate detection.
 pub const ARTIFACT_VERSION: u32 = 5;
 
-const ANALYZER_RULESET: &str = "slop-gate-analysis-v3|rust-function-item|rust-cc-v1|normalized-token-v1|shingle-v1|ordered-shingle-v1|normalized-ast-v1|ast-shingle-v1|repository-summary-v1|function-role-v1";
+const ANALYZER_RULESET: &str = "slop-gate-analysis-v4|rust-function-item|python-function-item-v1|typescript-function-item-v1|rust-cc-v1|python-cc-v1|typescript-cc-v1|normalized-token-v1|shingle-v1|ordered-shingle-v1|normalized-ast-v1|ast-shingle-v1|repository-summary-v1|function-role-v1";
 
 /// Fingerprint of the analyzer sources, emitted by the build script.
 const ANALYZER_SOURCE_FINGERPRINT: &str = env!("SLOP_GATE_ANALYZER_SOURCE_FINGERPRINT");
@@ -275,10 +275,36 @@ impl IndexArtifact {
                     format!("{:?}", file.path),
                 ));
             }
-            if file.language != "rust" {
+            if !matches!(file.language.as_str(), "rust" | "python" | "typescript") {
                 return Err(Error::invalid(
                     "artifact language",
                     format!("unsupported {:?}", file.language),
+                ));
+            }
+            let extension_language = if file.path.ends_with(".rs") {
+                Some("rust")
+            } else if file.path.ends_with(".py") {
+                Some("python")
+            } else if file.path.ends_with(".ts") || file.path.ends_with(".tsx") {
+                Some("typescript")
+            } else {
+                None
+            };
+            if extension_language != Some(file.language.as_str()) {
+                return Err(Error::invalid(
+                    "artifact language",
+                    format!(
+                        "{:?} does not match source path {:?}",
+                        file.language, file.path
+                    ),
+                ));
+            }
+            if file.functions.iter().any(|function| {
+                function.identity.language != file.language || function.identity.path != file.path
+            }) {
+                return Err(Error::invalid(
+                    "artifact function identity",
+                    format!("does not match file {:?}", file.path),
                 ));
             }
         }
@@ -346,7 +372,7 @@ mod tests {
         analyzer_fingerprint_with_policy, tool_version,
     };
     use crate::analysis::RepositorySummary;
-    use crate::analysis::analyze_rust_file;
+    use crate::analysis::{analyze_python_file, analyze_rust_file, analyze_typescript_file};
 
     #[test]
     fn artifact_round_trip_is_valid() {
@@ -355,6 +381,28 @@ mod tests {
         let encoded = artifact.to_json().unwrap();
         assert_eq!(artifact.to_json().unwrap(), encoded);
         assert_eq!(IndexArtifact::from_json(&encoded).unwrap(), artifact);
+    }
+
+    #[test]
+    fn multi_language_artifact_round_trip_is_valid() {
+        let python =
+            analyze_python_file("src/worker.py", "def run(value):\n    return value\n").unwrap();
+        let typescript =
+            analyze_typescript_file("src/view.tsx", "function View() { return <div />; }\n")
+                .unwrap();
+        let artifact = IndexArtifact::new("c".repeat(40), vec![python, typescript]).unwrap();
+        let encoded = artifact.to_json().unwrap();
+
+        assert_eq!(IndexArtifact::from_json(&encoded).unwrap(), artifact);
+    }
+
+    #[test]
+    fn artifact_rejects_a_function_identity_from_another_language() {
+        let mut file =
+            analyze_python_file("src/worker.py", "def run(value):\n    return value\n").unwrap();
+        file.functions[0].identity.language = "typescript".to_string();
+
+        assert!(IndexArtifact::new("c".repeat(40), vec![file]).is_err());
     }
 
     #[test]

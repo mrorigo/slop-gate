@@ -6,9 +6,9 @@
 [![Slop Gate passing](https://github.com/mrorigo/slop-gate/actions/workflows/slop-gate.yml/badge.svg)](https://github.com/mrorigo/slop-gate/actions/workflows/slop-gate.yml)
 
 `slop-gate` reviews a pull request in repository context. It builds a compact
-baseline artifact from a trusted Git commit, then evaluates only changed Rust
-functions in the candidate commit. It runs locally, uses no model, and makes no
-network request during analysis.
+baseline artifact from a trusted Git commit, then evaluates only changed
+functions in supported source files. It runs locally, uses no model, and makes
+no network request during analysis.
 
 See the [user guide](docs/user/index.md) for installation, commands,
 configuration, rule behavior, and CI setup.
@@ -34,6 +34,15 @@ Cyclomatic complexity (CC) counts independent control-flow paths. Source lines
 of code (SLOC) exclude blank and comment-only lines. Identifiers and literals
 are normalized before clone comparison, so a renamed copy still matches. Clone
 candidates must pass both normalized token and AST similarity thresholds.
+
+## Language support
+
+Slop Gate analyzes Rust, Python (`.py`), and TypeScript (`.ts`, `.tsx`). Python
+and TypeScript support function-mass checks and near-clone detection within the
+same language. Their metrics are newly introduced; keep their findings at
+warning severity until they have been calibrated on real repositories. See
+[Language support and limits](docs/user/rules.md#language-support) for the
+functions each analyzer records.
 
 ━━ How block detection works
 
@@ -116,7 +125,15 @@ Or run without installing:
 cargo run --release -- --help
 ```
 
-The current supported gate language is Rust.
+Slop Gate analyzes Rust, Python, and TypeScript (including TSX). Python and
+TypeScript analysis extracts named `def` and `function` declarations, class
+methods, and nested named functions. Python `@overload` stubs and TypeScript
+overload signatures without bodies are skipped. Lambdas, arrows, and other
+nested function expressions contribute to an extracted enclosing function but
+do not get independent records. Top-level function expressions are not
+analyzed. Clone matching compares functions only within the same language. Keep
+Python and TypeScript metrics at warning severity until real repositories have
+been calibrated.
 
 Rust parsing uses `tree-sitter-rust-orchard`, including its fix for valid
 macro-rule patterns that use the `~` token. Slop Gate rejects Rust files with
@@ -189,7 +206,7 @@ so GitHub can display its status.
 ## Start with an audit
 
 Use `scan` for a local repository audit. With no revision argument it scans
-`HEAD`; `--working-tree` includes untracked non-ignored Rust files and local
+`HEAD`; `--working-tree` includes untracked non-ignored supported source files and local
 edits. Git-ignored files remain excluded unless `--no-ignore` is supplied.
 
 ```sh
@@ -290,7 +307,7 @@ Slop Gate complements, rather than replaces, the standard Rust checks.
 It does not prove semantic equivalence, assess security, or replace a linter.
 The `index` and `check` commands use immutable Git revisions.
 The `scan --working-tree` command analyzes local changes, including untracked
-non-ignored Rust files. A malformed changed Rust file produces an analyzer
+non-ignored supported source files. A malformed changed source file produces an analyzer
 warning and is skipped. A malformed baseline prevents artifact creation.
 
 ## Develop

@@ -16,6 +16,25 @@ use super::{
 const LANGUAGE: &str = "rust";
 /// Number of normalized stream elements in one shingle window.
 pub const SHINGLE_SIZE: usize = 5;
+
+/// Hashes fixed-size normalized token windows for clone comparison.
+pub(crate) fn token_shingle_hashes<T: AsRef<str>>(tokens: &[T]) -> Vec<u32> {
+    if tokens.len() < SHINGLE_SIZE {
+        return Vec::new();
+    }
+    tokens
+        .windows(SHINGLE_SIZE)
+        .map(|window| {
+            let text = window
+                .iter()
+                .map(AsRef::as_ref)
+                .collect::<Vec<_>>()
+                .join("\u{1f}");
+            let hash = blake3::hash(text.as_bytes());
+            u32::from_le_bytes(hash.as_bytes()[..4].try_into().unwrap_or([0; 4]))
+        })
+        .collect()
+}
 const CONSTRUCTOR_COMPLEXITY_LIMIT: u32 = 3;
 
 /// Extracts direct production and build dependency edges from a Cargo manifest.
@@ -267,7 +286,7 @@ fn parse_rust(source: &str) -> Result<Tree> {
     Ok(tree)
 }
 
-fn first_error_node(node: Node<'_>) -> Node<'_> {
+pub(crate) fn first_error_node(node: Node<'_>) -> Node<'_> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.is_error() || child.is_missing() {
@@ -893,7 +912,11 @@ fn collect_comment_ranges(node: Node<'_>, is_root: bool, comments: &mut Vec<(usi
     }
 }
 
-fn line_has_code(line: &[u8], absolute_start: usize, comments: &[(usize, usize)]) -> bool {
+pub(crate) fn line_has_code(
+    line: &[u8],
+    absolute_start: usize,
+    comments: &[(usize, usize)],
+) -> bool {
     line.iter().enumerate().any(|(offset, byte)| {
         !byte.is_ascii_whitespace()
             && !comments.iter().any(|(start, end)| {

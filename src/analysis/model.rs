@@ -23,7 +23,7 @@ pub struct FunctionIdentity {
     pub language: String,
     /// Repository-relative declaration path.
     pub path: String,
-    /// Lexical module, trait, and implementation scopes followed by the name.
+    /// Language-specific lexical scopes followed by the declared name.
     pub qualified_name: String,
     /// The declaration category.
     pub kind: FunctionKind,
@@ -101,7 +101,7 @@ pub struct FunctionRecord {
     pub token_count: usize,
     /// Non-blank, non-comment-only physical lines of source.
     pub sloc: usize,
-    /// Cyclomatic complexity using the versioned Rust decision-node map.
+    /// Cyclomatic complexity using the versioned decision-node map for its language.
     pub cc: u32,
     /// `cc * sqrt(sloc)`.
     pub mass: f64,
