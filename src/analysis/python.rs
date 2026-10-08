@@ -6,7 +6,10 @@ use tree_sitter::{Node, Parser};
 use crate::error::{Error, Result};
 use crate::path::is_relative_path;
 
-use super::{AnalyzedFile, FunctionIdentity, FunctionKind, FunctionRecord, FunctionRole};
+use super::{
+    AnalyzedFile, FunctionIdentity, FunctionKind, FunctionRecord, FunctionRole,
+    extract::{first_error_node, token_shingle_hashes},
+};
 
 const LANGUAGE: &str = "python";
 const SHINGLE_SIZE: usize = 5;
@@ -45,7 +48,7 @@ pub fn analyze_python_file(path: &str, source: &str) -> Result<AnalyzedFile> {
         .parse(source, None)
         .ok_or_else(|| Error::invalid("Python parser", "did not produce a syntax tree"))?;
     if tree.root_node().has_error() {
-        let error = first_error(tree.root_node());
+        let error = first_error_node(tree.root_node());
         return Err(Error::invalid(
             "Python source",
             format!(
@@ -64,19 +67,6 @@ pub fn analyze_python_file(path: &str, source: &str) -> Result<AnalyzedFile> {
         content_hash: blake3::hash(source.as_bytes()).to_hex().to_string(),
         functions,
     })
-}
-
-fn first_error(node: Node<'_>) -> Node<'_> {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if child.is_error() || child.is_missing() {
-            return child;
-        }
-        if child.has_error() {
-            return first_error(child);
-        }
-    }
-    node
 }
 
 fn collect_functions(
@@ -199,8 +189,8 @@ fn make_record(
         .iter()
         .map(|item| item.text.as_str())
         .collect::<Vec<_>>();
-    let token_sequence = shingles(&token_strings);
-    let ast_sequence = shingles(&ast_strings);
+    let token_sequence = token_shingle_hashes(&token_strings);
+    let ast_sequence = token_shingle_hashes(&ast_strings);
     let mut token_unique = token_sequence.clone();
     token_unique.sort_unstable();
     token_unique.dedup();
@@ -348,19 +338,6 @@ fn is_wildcard_case(node: Node<'_>, source: &str) -> bool {
         .find(|child| child.kind() == "case_pattern")
         .and_then(|pattern| source.get(pattern.byte_range()))
         .is_some_and(|pattern| pattern.trim() == "_")
-}
-
-fn shingles(tokens: &[&str]) -> Vec<u32> {
-    if tokens.len() < SHINGLE_SIZE {
-        return Vec::new();
-    }
-    tokens
-        .windows(SHINGLE_SIZE)
-        .map(|window| {
-            let hash = blake3::hash(window.join("\u{1f}").as_bytes());
-            u32::from_le_bytes(hash.as_bytes()[..4].try_into().unwrap_or([0; 4]))
-        })
-        .collect()
 }
 
 fn hash_tokens(tokens: &[&str]) -> String {

@@ -8,7 +8,10 @@ use tree_sitter::{Language, Node, Parser};
 use crate::error::{Error, Result};
 use crate::path::is_relative_path;
 
-use super::{AnalyzedFile, FunctionIdentity, FunctionKind, FunctionRecord, FunctionRole};
+use super::{
+    AnalyzedFile, FunctionIdentity, FunctionKind, FunctionRecord, FunctionRole,
+    extract::{first_error_node, line_has_code, token_shingle_hashes},
+};
 
 const LANGUAGE_NAME: &str = "typescript";
 const SHINGLE_SIZE: usize = 5;
@@ -53,7 +56,7 @@ pub fn analyze_typescript_file(path: &str, source: &str) -> Result<AnalyzedFile>
         .parse(source, None)
         .ok_or_else(|| Error::invalid("TypeScript parser", "did not produce a syntax tree"))?;
     if tree.root_node().has_error() {
-        let node = first_error(tree.root_node());
+        let node = first_error_node(tree.root_node());
         return Err(Error::invalid(
             "TypeScript source",
             format!(
@@ -73,19 +76,6 @@ pub fn analyze_typescript_file(path: &str, source: &str) -> Result<AnalyzedFile>
         content_hash: blake3::hash(source.as_bytes()).to_hex().to_string(),
         functions,
     })
-}
-
-fn first_error(node: Node<'_>) -> Node<'_> {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if child.is_error() || child.is_missing() {
-            return child;
-        }
-        if child.has_error() {
-            return first_error(child);
-        }
-    }
-    node
 }
 
 fn collect_functions(
@@ -142,8 +132,8 @@ fn record_function(
         Some(kind) => format!("{kind} {name}"),
         None => name.clone(),
     });
-    let tokens = normalized_tokens(node, source, true)?;
-    let ast = normalized_ast(node, source, true)?;
+    let tokens = normalized(node, source, true, false)?;
+    let ast = normalized(node, source, true, true)?;
     let token_text = tokens
         .iter()
         .map(|token| token.text.as_str())
@@ -180,8 +170,17 @@ fn record_function(
         mass: f64::from(cc) * (sloc as f64).sqrt(),
         shingle_hashes: unique_shingles(&tokens),
         ast_shingle_hashes: unique_shingles(&ast),
-        token_shingle_sequence: shingles(&tokens),
-        ast_shingle_sequence: shingles(&ast),
+        token_shingle_sequence: token_shingle_hashes(
+            &tokens
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>(),
+        ),
+        ast_shingle_sequence: token_shingle_hashes(
+            &ast.iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>(),
+        ),
         token_line_runs: line_runs(&tokens),
         ast_line_runs: line_runs(&ast),
         role,
@@ -193,46 +192,38 @@ struct Token {
     line: usize,
 }
 
-fn normalized_tokens(node: Node<'_>, source: &str, root: bool) -> Result<Vec<Token>> {
+fn normalized(node: Node<'_>, source: &str, root: bool, ast: bool) -> Result<Vec<Token>> {
     if omitted(node, root) {
         return Ok(Vec::new());
     }
     if node.child_count() == 0 {
         return Ok(vec![Token {
-            text: normalize_leaf(node, source)?,
+            text: if ast {
+                format!("L:{}", normalize_leaf(node, source)?)
+            } else {
+                normalize_leaf(node, source)?
+            },
             line: node.start_position().row + 1,
         }]);
     }
-    let mut result = Vec::new();
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        result.extend(normalized_tokens(child, source, false)?);
-    }
-    Ok(result)
-}
-
-fn normalized_ast(node: Node<'_>, source: &str, root: bool) -> Result<Vec<Token>> {
-    if omitted(node, root) {
-        return Ok(Vec::new());
-    }
-    if node.child_count() == 0 {
-        return Ok(vec![Token {
-            text: format!("L:{}", normalize_leaf(node, source)?),
+    let mut result = if ast {
+        vec![Token {
+            text: format!("N:{}", node.kind()),
             line: node.start_position().row + 1,
-        }]);
-    }
-    let mut result = vec![Token {
-        text: format!("N:{}", node.kind()),
-        line: node.start_position().row + 1,
-    }];
+        }]
+    } else {
+        Vec::new()
+    };
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        result.extend(normalized_ast(child, source, false)?);
+        result.extend(normalized(child, source, false, ast)?);
     }
-    result.push(Token {
-        text: format!("/N:{}", node.kind()),
-        line: node.end_position().row + 1,
-    });
+    if ast {
+        result.push(Token {
+            text: format!("/N:{}", node.kind()),
+            line: node.end_position().row + 1,
+        });
+    }
     Ok(result)
 }
 
@@ -311,42 +302,17 @@ fn collect_omitted_ranges(node: Node<'_>, is_root: bool, ranges: &mut Vec<(usize
     }
 }
 
-fn line_has_code(line: &[u8], absolute_start: usize, omitted_ranges: &[(usize, usize)]) -> bool {
-    line.iter().enumerate().any(|(offset, byte)| {
-        !byte.is_ascii_whitespace()
-            && !omitted_ranges.iter().any(|(start, end)| {
-                let position = absolute_start + offset;
-                *start <= position && position < *end
-            })
-    })
-}
-
-fn shingles(tokens: &[Token]) -> Vec<u32> {
-    if tokens.len() < SHINGLE_SIZE {
-        return Vec::new();
-    }
-    tokens
-        .windows(SHINGLE_SIZE)
-        .map(|window| {
-            let text = window
-                .iter()
-                .map(|token| token.text.as_str())
-                .collect::<Vec<_>>()
-                .join("\u{1f}");
-            let hash = blake3::hash(text.as_bytes());
-            let mut bytes = [0_u8; 4];
-            bytes.copy_from_slice(&hash.as_bytes()[..4]);
-            u32::from_le_bytes(bytes)
-        })
-        .collect()
-}
-
 fn unique_shingles(tokens: &[Token]) -> Vec<u32> {
-    shingles(tokens)
-        .into_iter()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+    token_shingle_hashes(
+        &tokens
+            .iter()
+            .map(|token| token.text.as_str())
+            .collect::<Vec<_>>(),
+    )
+    .into_iter()
+    .collect::<BTreeSet<_>>()
+    .into_iter()
+    .collect()
 }
 
 fn line_runs(tokens: &[Token]) -> Vec<u32> {
