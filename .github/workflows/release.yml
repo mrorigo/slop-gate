@@ -13,7 +13,7 @@ jobs:
   verify-version:
     name: Verify release version
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-2-vcpu
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -145,7 +145,7 @@ jobs:
 
   release:
     name: Publish Release
-    runs-on: ubuntu-latest
+    runs-on: avrea-ubuntu-latest-2-vcpu
     needs: [verify-version, build]
     if: always() && (needs.verify-version.result == 'success' || needs.verify-version.result == 'skipped') && needs.build.result == 'success' && startsWith(github.ref, 'refs/tags/')
     permissions:
