@@ -157,13 +157,6 @@ pub(crate) fn check_mass(
     artifact.validate_with_fingerprint(&expected_fingerprint)?;
     let head_commit = repository.resolve_revision(head)?;
     let mut changed = repository.changed_source_files(&base_commit, &head_commit)?;
-    let base_functions = artifact
-        .files
-        .iter()
-        .flat_map(|file| file.functions.iter())
-        .map(|function| (function.identity.clone(), function))
-        .collect::<HashMap<_, _>>();
-
     // Analyze changed files before building clone candidates so candidates
     // represent declarations that still exist in HEAD. Baseline records are
     // retained separately for mass-delta comparisons below.
@@ -284,70 +277,20 @@ pub(crate) fn check_mass(
                     .and_then(|source| analyze_rust_file(&path, &source))
             })
             .collect::<Result<Vec<_>>>()?;
-        let policy = &config.rules.structural_erosion;
         let rust_base_files = artifact
             .files
             .iter()
             .filter(|file| file.language == "rust")
             .cloned()
             .collect::<Vec<_>>();
-        let head_summary =
-            RepositorySummary::from_files_with_cutoff(&rust_head_files, policy.complexity_cutoff);
-        let base_summary =
-            RepositorySummary::from_files_with_cutoff(&rust_base_files, policy.complexity_cutoff);
-        let delta = head_summary.erosion_ratio - base_summary.erosion_ratio;
-        // The ratio alone cannot separate "added complexity" from "deleted
-        // easy code": removing low-complexity code shrinks the denominator and
-        // raises the ratio. Growth of the absolute high-complexity mass is
-        // immune to that and is compared alongside the ratio.
-        let mass_growth = mass_growth(
-            base_summary.high_complexity_mass,
-            head_summary.high_complexity_mass,
+        evaluate_structural_erosion(
+            &rust_head_files,
+            &rust_base_files,
+            &changed.renamed_from,
+            &changed.added_lines,
+            config,
+            &mut report,
         );
-        let breaches = erosion_breaches(
-            &head_summary,
-            delta,
-            mass_growth,
-            policy.erosion_limit,
-            policy.delta_limit,
-            policy.mass_growth_limit,
-        );
-        if !breaches.is_empty() {
-            let by_cutoff = CUTOFF_DISTRIBUTION
-                .iter()
-                .map(|cutoff| {
-                    (
-                        cutoff.to_string(),
-                        format!(
-                            "{:.6}",
-                            RepositorySummary::from_files_with_cutoff(&rust_head_files, *cutoff)
-                                .erosion_ratio
-                        ),
-                    )
-                })
-                .collect::<BTreeMap<_, _>>();
-            push_if_enabled(
-                &mut report,
-                erosion_finding(ErosionFindingInput {
-                    head_files: &rust_head_files,
-                    base_functions: &base_functions,
-                    renamed_from: &changed.renamed_from,
-                    added_lines: &changed.added_lines,
-                    head: &head_summary,
-                    base: &base_summary,
-                    delta,
-                    mass_growth,
-                    breaches,
-                    erosion_by_cutoff: by_cutoff,
-                    erosion_limit: policy.erosion_limit,
-                    delta_limit: policy.delta_limit,
-                    mass_growth_limit: policy.mass_growth_limit,
-                    complexity_cutoff: policy.complexity_cutoff,
-                    top_contributors: policy.top_contributors,
-                }),
-                config,
-            );
-        }
     }
     report.findings.sort_by(finding_order);
     Ok(report)
@@ -1187,13 +1130,24 @@ fn evaluate_dependency_surface(
         .map(|source| dependency_edges(&source))
         .transpose()?
         .unwrap_or_default();
+    evaluate_dependency_edges(path, &head_edges, &base_edges, config, report);
+    Ok(())
+}
+
+pub(crate) fn evaluate_dependency_edges(
+    path: &str,
+    head_edges: &[crate::analysis::DependencyEdge],
+    base_edges: &[crate::analysis::DependencyEdge],
+    config: &GateConfig,
+    report: &mut CheckReport,
+) {
     for edge in head_edges {
         let base_edge = base_edges.iter().find(|candidate| {
             candidate.table_path == edge.table_path
                 && candidate.dependency_key == edge.dependency_key
         });
         let Some(base_edge) = base_edge else {
-            dependency_finding(report, path, &edge, "new-dependency", config);
+            dependency_finding(report, path, edge, "new-dependency", config);
             continue;
         };
         let features_expanded = edge
@@ -1205,10 +1159,82 @@ fn evaluate_dependency_surface(
             || base_edge.source_kind != edge.source_kind
             || base_edge.source != edge.source;
         if features_expanded || defaults_expanded || declaration_expanded {
-            dependency_finding(report, path, &edge, "expanded-dependency-surface", config);
+            dependency_finding(report, path, edge, "expanded-dependency-surface", config);
         }
     }
-    Ok(())
+}
+
+/// Evaluates structural erosion from complete Rust records without repository access.
+pub(crate) fn evaluate_structural_erosion(
+    head_files: &[crate::analysis::AnalyzedFile],
+    base_files: &[crate::analysis::AnalyzedFile],
+    renamed_from: &HashMap<String, String>,
+    added_lines: &HashMap<String, ChangedLineSet>,
+    config: &GateConfig,
+    report: &mut CheckReport,
+) {
+    if config.rules.structural_erosion.severity == RuleSeverity::Off {
+        return;
+    }
+    let policy = &config.rules.structural_erosion;
+    let base_functions = base_files
+        .iter()
+        .flat_map(|file| file.functions.iter())
+        .map(|function| (function.identity.clone(), function))
+        .collect::<HashMap<_, _>>();
+    let head_summary =
+        RepositorySummary::from_files_with_cutoff(head_files, policy.complexity_cutoff);
+    let base_summary =
+        RepositorySummary::from_files_with_cutoff(base_files, policy.complexity_cutoff);
+    let delta = head_summary.erosion_ratio - base_summary.erosion_ratio;
+    let mass_growth = mass_growth(
+        base_summary.high_complexity_mass,
+        head_summary.high_complexity_mass,
+    );
+    let breaches = erosion_breaches(
+        &head_summary,
+        delta,
+        mass_growth,
+        policy.erosion_limit,
+        policy.delta_limit,
+        policy.mass_growth_limit,
+    );
+    if breaches.is_empty() {
+        return;
+    }
+    let by_cutoff = CUTOFF_DISTRIBUTION
+        .iter()
+        .map(|cutoff| {
+            (
+                cutoff.to_string(),
+                format!(
+                    "{:.6}",
+                    RepositorySummary::from_files_with_cutoff(head_files, *cutoff).erosion_ratio
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    push_if_enabled(
+        report,
+        erosion_finding(ErosionFindingInput {
+            head_files,
+            base_functions: &base_functions,
+            renamed_from,
+            added_lines,
+            head: &head_summary,
+            base: &base_summary,
+            delta,
+            mass_growth,
+            breaches,
+            erosion_by_cutoff: by_cutoff,
+            erosion_limit: policy.erosion_limit,
+            delta_limit: policy.delta_limit,
+            mass_growth_limit: policy.mass_growth_limit,
+            complexity_cutoff: policy.complexity_cutoff,
+            top_contributors: policy.top_contributors,
+        }),
+        config,
+    );
 }
 
 fn dependency_finding(

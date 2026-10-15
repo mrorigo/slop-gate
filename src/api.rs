@@ -1,5 +1,9 @@
 // Rust guideline compliant 2026-10-15
 //! Snapshot-based application API that does not inspect a repository.
+//!
+//! Calls use only caller-owned values and do not mutate process-global state.
+//! Policies and completed indexes can be shared between threads; callers own
+//! cancellation tokens and should coordinate writes to them with atomic operations.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,13 +11,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::{
-    AnalyzedFile, FunctionRecord, analyze_source_file, analyzer_fingerprint, dependency_edges,
+    AnalyzedFile, DependencyEdge, FunctionRecord, analyze_source_file, analyzer_fingerprint,
+    dependency_edges,
 };
 use crate::config::GateConfig;
 use crate::diff::{added_line_numbers, line_hashes};
 use crate::error::{Error, Result};
 use crate::gate::{
-    Severity, evaluate_function_changes, evaluate_lint_suppression_records,
+    Severity, evaluate_dependency_edges, evaluate_function_changes,
+    evaluate_lint_suppression_records, evaluate_structural_erosion,
     evaluate_unsafe_surface_records,
 };
 use crate::git::ChangedLineSet;
@@ -54,6 +60,8 @@ pub enum EntryKind {
 }
 
 /// A validated policy parsed from TOML bytes.
+///
+/// The value is immutable after construction and can be shared across concurrent calls.
 #[derive(Debug, Clone)]
 pub struct Policy {
     config: GateConfig,
@@ -61,6 +69,9 @@ pub struct Policy {
 }
 
 /// A validated in-memory analysis index for an explicit snapshot.
+///
+/// Indexes can be shared across concurrent evaluations. Persisted indexes are
+/// disposable and must pass schema, analyzer, and policy checks before reuse.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotIndex {
     /// Snapshot index schema version.
@@ -83,6 +94,8 @@ pub struct SnapshotIndex {
     pub lint_suppressions: Vec<SnapshotLintSuppression>,
     /// Rust unsafe-surface facts retained for baseline comparison.
     pub unsafe_constructs: Vec<SnapshotUnsafeConstruct>,
+    /// Direct Cargo dependency facts retained for baseline comparison.
+    pub dependency_edges: Vec<SnapshotDependencyEdge>,
 }
 
 /// Content-free metadata for one indexed snapshot entry.
@@ -127,6 +140,31 @@ pub struct SnapshotUnsafeConstruct {
     /// Normalized construct fingerprint used for matching.
     pub fingerprint: String,
     /// One-based line containing the primary `unsafe` token.
+    pub line: usize,
+}
+
+/// A normalized Cargo dependency edge retained in a baseline index.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotDependencyEdge {
+    /// Repository-relative manifest path.
+    pub path: String,
+    /// Manifest-relative table path.
+    pub table_path: String,
+    /// Dependency key used by Cargo.
+    pub dependency_key: String,
+    /// Optional renamed package name.
+    pub package: Option<String>,
+    /// Source kind such as `registry`, `git`, `path`, or `unspecified`.
+    pub source_kind: String,
+    /// Normalized source locator, when present.
+    pub source: Option<String>,
+    /// Whether Cargo default features are enabled.
+    pub default_features: bool,
+    /// Sorted explicitly enabled features.
+    pub features: Vec<String>,
+    /// Normalized version requirement, when present.
+    pub version: Option<String>,
+    /// One-based dependency declaration line.
     pub line: usize,
 }
 
@@ -334,6 +372,8 @@ impl SnapshotIndex {
 /// Unsupported file kinds and languages are recorded as exclusions. Invalid
 /// paths or duplicate paths reject the snapshot. Cancellation and budgets are
 /// checked between entries; a partial index is returned with incomplete coverage.
+/// No input is read from the working directory. Calls are independent and may
+/// run concurrently when callers use distinct or properly synchronized tokens.
 pub fn build_index(
     snapshot: &SourceSnapshot,
     policy: &Policy,
@@ -359,6 +399,7 @@ pub fn build_index(
     let mut consumed = 0usize;
     let mut lint_suppressions = Vec::new();
     let mut unsafe_constructs = Vec::new();
+    let mut dependency_facts = Vec::new();
     for (index, entry) in entries.iter().enumerate() {
         if cancelled.load(Ordering::Relaxed) {
             coverage_records.extend(
@@ -445,11 +486,25 @@ pub fn build_index(
         }
         if entry.path.ends_with("Cargo.toml") {
             match dependency_edges(source) {
-                Ok(_) => coverage_records.push(coverage(
-                    entry,
-                    CoverageStatus::Analyzed,
-                    "Cargo manifest parsed",
-                )),
+                Ok(edges) => {
+                    dependency_facts.extend(edges.into_iter().map(|edge| SnapshotDependencyEdge {
+                        path: entry.path.clone(),
+                        table_path: edge.table_path,
+                        dependency_key: edge.dependency_key,
+                        package: edge.package,
+                        source_kind: edge.source_kind,
+                        source: edge.source,
+                        default_features: edge.default_features,
+                        features: edge.features,
+                        version: edge.version,
+                        line: edge.line,
+                    }));
+                    coverage_records.push(coverage(
+                        entry,
+                        CoverageStatus::Analyzed,
+                        "Cargo manifest parsed",
+                    ));
+                }
                 Err(error) => coverage_records.push(coverage(
                     entry,
                     CoverageStatus::Failed,
@@ -488,15 +543,18 @@ pub fn build_index(
         entries: metadata,
         lint_suppressions,
         unsafe_constructs,
+        dependency_edges: dependency_facts,
     })
 }
 
 /// Evaluates a candidate snapshot against an explicit baseline index.
 ///
-/// Evaluates function-mass and near-clone rules using the same rule engine as
-/// the CLI. Other enabled rules are identified as incomplete in rule coverage
-/// until their snapshot-native evaluators are added. Baseline compatibility
+/// Enabled rules use the same evaluators as the CLI. Baseline compatibility
 /// and manifest consistency are checked before candidate bytes are analyzed.
+/// Cancellation and resource limits are cooperative and are checked between
+/// bounded units of work. Candidate analysis returns accumulated coverage when
+/// interrupted; an unusable baseline returns a typed error before evaluation.
+/// Calls do not access or mutate process-global state and may run concurrently.
 pub fn evaluate(
     baseline: &SnapshotIndex,
     candidate: &SourceSnapshot,
@@ -580,7 +638,23 @@ pub fn evaluate(
             grouped
         },
     );
+    let baseline_dependencies =
+        baseline
+            .dependency_edges
+            .iter()
+            .fold(HashMap::<_, Vec<_>>::new(), |mut grouped, fact| {
+                grouped.entry(fact.path.as_str()).or_default().push(fact);
+                grouped
+            });
+    let candidate_dependencies = candidate_index.dependency_edges.iter().fold(
+        HashMap::<_, Vec<_>>::new(),
+        |mut grouped, fact| {
+            grouped.entry(fact.path.as_str()).or_default().push(fact);
+            grouped
+        },
+    );
     let mut diff_failures = HashMap::new();
+    let mut added_lines_by_path = HashMap::new();
     for path in manifest.changed.iter().filter(|path| path.ends_with(".rs")) {
         let old_path = manifest.renamed_from.get(path).unwrap_or(path);
         let old_lines = baseline_entries
@@ -597,6 +671,7 @@ pub fn evaluate(
                 continue;
             }
         };
+        added_lines_by_path.insert(path.clone(), added.clone());
         let to_lint = |facts: &[&SnapshotLintSuppression]| {
             facts
                 .iter()
@@ -660,6 +735,78 @@ pub fn evaluate(
             &mut core_report,
         );
     }
+    for path in manifest
+        .changed
+        .iter()
+        .filter(|path| path.ends_with("Cargo.toml"))
+    {
+        let to_edge = |facts: &[&SnapshotDependencyEdge]| {
+            facts
+                .iter()
+                .map(|fact| DependencyEdge {
+                    table_path: fact.table_path.clone(),
+                    dependency_key: fact.dependency_key.clone(),
+                    package: fact.package.clone(),
+                    source_kind: fact.source_kind.clone(),
+                    source: fact.source.clone(),
+                    default_features: fact.default_features,
+                    features: fact.features.clone(),
+                    version: fact.version.clone(),
+                    line: fact.line,
+                })
+                .collect::<Vec<_>>()
+        };
+        let head = to_edge(
+            candidate_dependencies
+                .get(path.as_str())
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+        );
+        let old_path = manifest.renamed_from.get(path).unwrap_or(path);
+        let base = to_edge(
+            baseline_dependencies
+                .get(old_path.as_str())
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+        );
+        evaluate_dependency_edges(path, &head, &base, &policy.config, &mut core_report);
+    }
+    let structural_complete = candidate_index
+        .coverage
+        .iter()
+        .filter(|file| file.path.ends_with(".rs"))
+        .all(|file| file.status == CoverageStatus::Analyzed)
+        && manifest
+            .changed
+            .iter()
+            .filter(|path| path.ends_with(".rs"))
+            .all(|path| !diff_failures.contains_key(path));
+    if structural_complete {
+        let head_rust = candidate_index
+            .files
+            .iter()
+            .filter(|file| file.path.ends_with(".rs"))
+            .cloned()
+            .collect::<Vec<_>>();
+        let base_rust = baseline
+            .files
+            .iter()
+            .filter(|file| file.path.ends_with(".rs"))
+            .cloned()
+            .collect::<Vec<_>>();
+        evaluate_structural_erosion(
+            &head_rust,
+            &base_rust,
+            &manifest
+                .renamed_from
+                .iter()
+                .map(|(new, old)| (new.clone(), old.clone()))
+                .collect(),
+            &added_lines_by_path,
+            &policy.config,
+            &mut core_report,
+        );
+    }
     core_report.findings.sort_by(|left, right| {
         (&left.location.path, left.location.line, &left.rule_id).cmp(&(
             &right.location.path,
@@ -712,8 +859,13 @@ pub fn evaluate(
             }
         })
         .collect::<Vec<_>>();
-    let (rule_coverage, unimplemented_rules) =
-        build_rule_coverage(&candidate_index, manifest, policy, &diff_failures);
+    let (rule_coverage, unimplemented_rules) = build_rule_coverage(
+        &candidate_index,
+        manifest,
+        policy,
+        &diff_failures,
+        structural_complete,
+    );
     let mut reasons = unimplemented_rules
         .into_iter()
         .map(IncompleteReason::RuleNotImplemented)
@@ -738,6 +890,12 @@ pub fn evaluate(
             })
             .collect::<Vec<_>>(),
     );
+    let mut unique_reasons = Vec::with_capacity(reasons.len());
+    for reason in reasons {
+        if !unique_reasons.contains(&reason) {
+            unique_reasons.push(reason);
+        }
+    }
     Ok(EvaluationReport {
         schema_version: 1,
         baseline_id: baseline.source_id.clone(),
@@ -750,8 +908,8 @@ pub fn evaluate(
         coverage: candidate_index.coverage,
         rule_coverage,
         completeness: Completeness {
-            complete: reasons.is_empty(),
-            reasons,
+            complete: unique_reasons.is_empty(),
+            reasons: unique_reasons,
         },
     })
 }
@@ -826,7 +984,7 @@ fn validate_manifest(
         }
     }
     for (new, old) in &manifest.renamed_from {
-        if !manifest.changed.contains(new) || !base_paths.contains(old.as_str()) {
+        if new == old || !manifest.changed.contains(new) || !base_paths.contains(old.as_str()) {
             return Err(Error::InvalidSnapshot(format!(
                 "rename {old:?} -> {new:?} is inconsistent"
             )));
@@ -912,7 +1070,11 @@ fn validate_index(index: &SnapshotIndex) -> Result<()> {
             EntryKind::Symlink => entry.mode == 0o120000,
             EntryKind::Submodule => entry.mode == 0o160000,
         };
-        if !is_relative_path(&entry.path) || !valid_mode || entry.content_hash.len() != 64 {
+        if !is_relative_path(&entry.path)
+            || entry.path.contains('\\')
+            || !valid_mode
+            || entry.content_hash.len() != 64
+        {
             return Err(Error::IncompatibleBaseline(format!(
                 "entry metadata for {:?} is invalid",
                 entry.path
@@ -969,6 +1131,26 @@ fn validate_index(index: &SnapshotIndex) -> Result<()> {
         if !path.ends_with(".rs") || line == 0 || line > entry.line_hashes.len() {
             return Err(Error::IncompatibleBaseline(format!(
                 "source fact location {path}:{line} is invalid"
+            )));
+        }
+    }
+    for fact in &index.dependency_edges {
+        let Some(entry) = metadata.get(fact.path.as_str()) else {
+            return Err(Error::IncompatibleBaseline(format!(
+                "dependency fact path {:?} is absent from the entry manifest",
+                fact.path
+            )));
+        };
+        if entry.kind != EntryKind::File
+            || !fact.path.ends_with("Cargo.toml")
+            || fact.line == 0
+            || fact.line > entry.line_hashes.len()
+            || fact.table_path.is_empty()
+            || fact.dependency_key.is_empty()
+        {
+            return Err(Error::IncompatibleBaseline(format!(
+                "dependency fact location or identity for {:?} is invalid",
+                fact.path
             )));
         }
     }
@@ -1048,6 +1230,7 @@ fn build_rule_coverage(
     manifest: &ChangeManifest,
     policy: &Policy,
     diff_failures: &HashMap<String, String>,
+    structural_complete: bool,
 ) -> (Vec<RuleCoverage>, Vec<String>) {
     let rules = [
         ("function-mass", policy.config.rules.function_mass.severity),
@@ -1070,7 +1253,6 @@ fn build_rule_coverage(
         ),
     ];
     let mut records = Vec::new();
-    let mut unavailable = BTreeSet::new();
     for file in &index.coverage {
         for (rule_id, severity) in rules {
             let changed = manifest.changed.contains(&file.path);
@@ -1090,17 +1272,13 @@ fn build_rule_coverage(
                 file.status == CoverageStatus::Analyzed
             } else if matches!(rule_id, "lint-suppression-growth" | "unsafe-surface-growth") {
                 file.status == CoverageStatus::Analyzed && !diff_failures.contains_key(&file.path)
+            } else if rule_id == "dependency-surface-growth" {
+                file.status == CoverageStatus::Analyzed
+            } else if rule_id == "structural-erosion" {
+                structural_complete
             } else {
                 false
             };
-            if applies
-                && enabled
-                && !completed
-                && file.status == CoverageStatus::Analyzed
-                && !diff_failures.contains_key(&file.path)
-            {
-                unavailable.insert(rule_id.to_string());
-            }
             records.push(RuleCoverage {
                 path: file.path.clone(),
                 rule_id: rule_id.to_string(),
@@ -1122,12 +1300,12 @@ fn build_rule_coverage(
                 } else if file.status != CoverageStatus::Analyzed {
                     file.detail.clone()
                 } else {
-                    Some("snapshot facade does not implement this rule yet".into())
+                    Some("analysis did not complete for this rule".into())
                 },
             });
         }
     }
-    (records, unavailable.into_iter().collect())
+    (records, Vec::new())
 }
 fn coverage(entry: &SnapshotEntry, status: CoverageStatus, detail: &str) -> FileCoverage {
     FileCoverage {
@@ -1141,4 +1319,340 @@ fn is_supported(path: &str) -> bool {
         || path.ends_with(".py")
         || path.ends_with(".ts")
         || path.ends_with(".tsx")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process::Command;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::{
+        ChangeManifest, CoverageStatus, EntryKind, IncompleteReason, ResourceLimits, SnapshotEntry,
+        SourceSnapshot, build_index, evaluate, function_records, parse_policy,
+    };
+
+    static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    fn entry(path: &str, bytes: &[u8]) -> SnapshotEntry {
+        SnapshotEntry {
+            path: path.into(),
+            kind: EntryKind::File,
+            mode: 0o100644,
+            bytes: bytes.to_vec(),
+        }
+    }
+
+    fn snapshot(id: &str, entries: Vec<SnapshotEntry>) -> SourceSnapshot {
+        SourceSnapshot {
+            id: id.into(),
+            entries,
+        }
+    }
+
+    fn index(source: &SourceSnapshot, policy: &super::Policy) -> super::SnapshotIndex {
+        build_index(
+            source,
+            policy,
+            &AtomicBool::new(false),
+            ResourceLimits::default(),
+        )
+        .unwrap()
+    }
+
+    fn changed(path: &str) -> ChangeManifest {
+        ChangeManifest {
+            changed: BTreeSet::from([path.into()]),
+            ..ChangeManifest::default()
+        }
+    }
+
+    #[test]
+    fn supplied_candidate_bytes_produce_structural_findings() {
+        let policy = parse_policy(
+            b"[rules.structural_erosion]\nseverity = \"error\"\nerosion_limit = 1.0\ndelta_limit = 1.0\nmass_growth_limit = 0.0\n",
+        )
+        .unwrap();
+        let baseline = snapshot("base", vec![entry("src/lib.rs", b"fn small() {}\n")]);
+        let body = std::iter::repeat_n("    if flag {}\n", 30).collect::<String>();
+        let candidate_source = format!("fn large(flag: bool) {{\n{body}}}\nfn small() {{}}\n");
+        let candidate = snapshot(
+            "candidate",
+            vec![entry("src/lib.rs", candidate_source.as_bytes())],
+        );
+        let baseline_index = index(&baseline, &policy);
+
+        let report = evaluate(
+            &baseline_index,
+            &candidate,
+            &changed("src/lib.rs"),
+            &policy,
+            &AtomicBool::new(false),
+            ResourceLimits::default(),
+        )
+        .unwrap();
+
+        assert!(report.completeness.complete);
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.rule_id == "structural-erosion")
+        );
+    }
+
+    #[test]
+    fn captured_candidate_is_independent_of_later_caller_changes() {
+        let policy = parse_policy(b"").unwrap();
+        let baseline = snapshot("base", vec![entry("src/lib.rs", b"fn original() {}\n")]);
+        let baseline_index = index(&baseline, &policy);
+        let captured = snapshot("captured", vec![entry("src/lib.rs", b"fn captured() {}\n")]);
+        let candidate_id = index(&captured, &policy).snapshot_id;
+        let mut later = captured.clone();
+        later.entries[0].bytes = b"fn changed_after_capture() {}\n".to_vec();
+
+        let report = evaluate(
+            &baseline_index,
+            &captured,
+            &changed("src/lib.rs"),
+            &policy,
+            &AtomicBool::new(false),
+            ResourceLimits::default(),
+        )
+        .unwrap();
+
+        assert_eq!(report.candidate_snapshot_id, candidate_id);
+        assert_ne!(
+            index(&later, &policy).snapshot_id,
+            report.candidate_snapshot_id
+        );
+    }
+
+    #[test]
+    fn untracked_source_entries_are_indexed() {
+        let policy = parse_policy(b"[rules.function_mass]\nnew_function_limit = 0.0\n").unwrap();
+        let baseline = snapshot("base", vec![]);
+        let source = snapshot(
+            "candidate",
+            vec![entry(
+                "src/new.rs",
+                b"fn new_function(flag: bool) { if flag {} }\n",
+            )],
+        );
+        let candidate_index = index(&source, &policy);
+        assert!(
+            function_records(&candidate_index)
+                .iter()
+                .any(|record| record.name == "new_function")
+        );
+        let report = evaluate(
+            &index(&baseline, &policy),
+            &source,
+            &changed("src/new.rs"),
+            &policy,
+            &AtomicBool::new(false),
+            ResourceLimits::default(),
+        )
+        .unwrap();
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.rule_id == "function-mass")
+        );
+    }
+
+    #[test]
+    fn deleted_source_functions_are_absent_from_candidate_records() {
+        let policy = parse_policy(b"").unwrap();
+        let baseline = snapshot("base", vec![entry("src/removed.rs", b"fn removed() {}\n")]);
+        let candidate = snapshot("candidate", vec![]);
+        let baseline_index = index(&baseline, &policy);
+        assert!(function_records(&index(&candidate, &policy)).is_empty());
+        let manifest = ChangeManifest {
+            deleted: BTreeSet::from(["src/removed.rs".into()]),
+            ..ChangeManifest::default()
+        };
+
+        let report = evaluate(
+            &baseline_index,
+            &candidate,
+            &manifest,
+            &policy,
+            &AtomicBool::new(false),
+            ResourceLimits::default(),
+        )
+        .unwrap();
+
+        assert!(report.completeness.complete);
+        assert!(report.coverage.is_empty());
+    }
+
+    #[test]
+    fn malformed_changed_rust_marks_required_coverage_incomplete() {
+        let policy = parse_policy(b"").unwrap();
+        let baseline = snapshot("base", vec![entry("src/lib.rs", b"fn valid() {}\n")]);
+        let candidate = snapshot("candidate", vec![entry("src/lib.rs", b"fn broken( {\n")]);
+        let report = evaluate(
+            &index(&baseline, &policy),
+            &candidate,
+            &changed("src/lib.rs"),
+            &policy,
+            &AtomicBool::new(false),
+            ResourceLimits::default(),
+        )
+        .unwrap();
+
+        assert_eq!(report.coverage[0].status, CoverageStatus::Failed);
+        assert!(!report.completeness.complete);
+        assert!(report.completeness.reasons.iter().any(|reason| matches!(
+            reason,
+            IncompleteReason::ParseFailure(path) if path == "src/lib.rs"
+        )));
+    }
+
+    #[test]
+    fn incompatible_policy_rejects_a_cached_baseline() {
+        let policy = parse_policy(b"").unwrap();
+        let other_policy = parse_policy(b"[rules.near_clone]\nminimum_tokens = 41\n").unwrap();
+        let baseline = snapshot("base", vec![entry("src/lib.rs", b"fn valid() {}\n")]);
+        let baseline_index = index(&baseline, &policy);
+        let serialized = baseline_index.to_json().unwrap();
+        let cached_error = super::SnapshotIndex::from_json(&serialized, &other_policy).unwrap_err();
+        assert!(matches!(
+            cached_error,
+            crate::error::AppError::IncompatibleBaseline(_)
+        ));
+        let error = evaluate(
+            &baseline_index,
+            &baseline,
+            &ChangeManifest::default(),
+            &other_policy,
+            &AtomicBool::new(false),
+            ResourceLimits::default(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            crate::error::AppError::IncompatibleBaseline(_)
+        ));
+    }
+
+    #[test]
+    fn cancellation_returns_accumulated_candidate_coverage() {
+        let policy = parse_policy(b"").unwrap();
+        let baseline = snapshot("base", vec![entry("src/lib.rs", b"fn valid() {}\n")]);
+        let baseline_index = index(&baseline, &policy);
+        let candidate = snapshot("candidate", vec![entry("src/lib.rs", b"fn changed() {}\n")]);
+        let cancelled = AtomicBool::new(true);
+
+        let report = evaluate(
+            &baseline_index,
+            &candidate,
+            &changed("src/lib.rs"),
+            &policy,
+            &cancelled,
+            ResourceLimits::default(),
+        )
+        .unwrap();
+
+        assert_eq!(report.coverage[0].status, CoverageStatus::Failed);
+        assert!(!report.completeness.complete);
+        assert!(
+            report
+                .completeness
+                .reasons
+                .contains(&IncompleteReason::Cancelled)
+        );
+    }
+
+    #[test]
+    fn git_and_snapshot_adapters_report_the_same_findings() {
+        let policy = parse_policy(
+            b"[rules.structural_erosion]\nseverity = \"error\"\nerosion_limit = 1.0\ndelta_limit = 1.0\nmass_growth_limit = 0.0\n",
+        )
+        .unwrap();
+        let base_source = "fn small() {}\n";
+        let body = std::iter::repeat_n("    if flag {}\n", 30).collect::<String>();
+        let head_source = format!("fn large(flag: bool) {{\n{body}}}\nfn small() {{}}\n");
+        let path = test_repository(base_source, &head_source);
+        let repository = crate::git::GitRepository::open(&path).unwrap();
+        let mut artifact = crate::gate::build_artifact(&repository, "HEAD~1").unwrap();
+        crate::gate::bind_policy(&mut artifact, &policy.config).unwrap();
+        let cli_report =
+            crate::gate::check_mass(&repository, "HEAD~1", "HEAD", &artifact, &policy.config)
+                .unwrap();
+        let base = snapshot("base", vec![entry("src/lib.rs", base_source.as_bytes())]);
+        let candidate = snapshot(
+            "candidate",
+            vec![entry("src/lib.rs", head_source.as_bytes())],
+        );
+        let api_report = evaluate(
+            &index(&base, &policy),
+            &candidate,
+            &changed("src/lib.rs"),
+            &policy,
+            &AtomicBool::new(false),
+            ResourceLimits::default(),
+        )
+        .unwrap();
+
+        let cli_findings = cli_report
+            .findings
+            .iter()
+            .map(|finding| {
+                (
+                    finding.rule_id.as_str(),
+                    finding.location.path.as_str(),
+                    finding.location.line,
+                    finding.properties.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let api_findings = api_report
+            .findings
+            .iter()
+            .map(|finding| {
+                (
+                    finding.rule_id.as_str(),
+                    finding.path.as_str(),
+                    finding.line,
+                    finding.properties.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(api_findings, cli_findings);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    fn test_repository(base_source: &str, head_source: &str) -> PathBuf {
+        let nonce = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("slop-gate-api-test-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(path.join("src")).unwrap();
+        run_git(&path, &["init", "--quiet"]);
+        run_git(&path, &["config", "user.email", "test@example.invalid"]);
+        run_git(&path, &["config", "user.name", "Slop Gate Test"]);
+        fs::write(path.join("src/lib.rs"), base_source).unwrap();
+        run_git(&path, &["add", "src/lib.rs"]);
+        run_git(&path, &["commit", "--quiet", "-m", "base"]);
+        fs::write(path.join("src/lib.rs"), head_source).unwrap();
+        run_git(&path, &["add", "src/lib.rs"]);
+        run_git(&path, &["commit", "--quiet", "-m", "head"]);
+        path
+    }
+
+    fn run_git(path: &std::path::Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git command failed: {args:?}");
+    }
 }
