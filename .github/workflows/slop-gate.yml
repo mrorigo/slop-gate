@@ -26,6 +26,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Install Slop Gate
+        id: slop-gate
         shell: bash
         run: |
           set -euo pipefail
@@ -49,12 +50,15 @@ jobs:
           # a missing binary must fail the step rather than print an empty line.
           resolved="$("$RUNNER_TEMP/slop-gate/bin/slop-gate" --version)"
           echo "$resolved"
+          version="${resolved#slop-gate }"
+          test "$version" != "$resolved"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - run: mkdir -p .slop-gate
       - run: slop-gate index --ref HEAD --output .slop-gate/index.json
       - uses: actions/cache/save@v4
         with:
           path: .slop-gate/index.json
-          key: slop-gate-index-${{ github.sha }}
+          key: slop-gate-index-${{ github.sha }}-${{ steps.slop-gate.outputs.version }}
 
   check-pr:
     if: github.event_name == 'pull_request'
@@ -67,6 +71,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Install Slop Gate
+        id: slop-gate
         shell: bash
         run: |
           set -euo pipefail
@@ -90,11 +95,14 @@ jobs:
           # a missing binary must fail the step rather than print an empty line.
           resolved="$("$RUNNER_TEMP/slop-gate/bin/slop-gate" --version)"
           echo "$resolved"
+          version="${resolved#slop-gate }"
+          test "$version" != "$resolved"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4
         id: restore-index
         with:
           path: .slop-gate/index.json
-          key: slop-gate-index-${{ github.event.pull_request.base.sha }}
+          key: slop-gate-index-${{ github.event.pull_request.base.sha }}-${{ steps.slop-gate.outputs.version }}
       - if: steps.restore-index.outputs.cache-hit != 'true'
         run: mkdir -p .slop-gate && slop-gate index --ref ${{ github.event.pull_request.base.sha }} --output .slop-gate/index.json
       - run: slop-gate check --base ${{ github.event.pull_request.base.sha }} --head HEAD --index .slop-gate/index.json --format sarif > slop-gate.sarif
