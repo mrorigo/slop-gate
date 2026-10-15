@@ -11,6 +11,7 @@ use crate::analysis::{
 };
 use crate::analysis::{dependency_edges, lint_suppressions, unsafe_surface};
 use crate::config::{GateConfig, NearCloneRule, RuleSeverity};
+use crate::diff::{added_line_numbers, line_hashes};
 use crate::error::{Error, Result};
 use crate::git::{ChangedLineSet, GitRepository};
 
@@ -155,21 +156,16 @@ pub(crate) fn check_mass(
     };
     artifact.validate_with_fingerprint(&expected_fingerprint)?;
     let head_commit = repository.resolve_revision(head)?;
-    let changed = repository.changed_source_files(&base_commit, &head_commit)?;
-    let base_functions = artifact
-        .files
-        .iter()
-        .flat_map(|file| file.functions.iter())
-        .map(|function| (function.identity.clone(), function))
-        .collect::<HashMap<_, _>>();
-    let mut report = CheckReport::default();
-
+    let mut changed = repository.changed_source_files(&base_commit, &head_commit)?;
     // Analyze changed files before building clone candidates so candidates
     // represent declarations that still exist in HEAD. Baseline records are
     // retained separately for mass-delta comparisons below.
+    let mut report = CheckReport::default();
     let mut head_files = HashMap::new();
+    let mut head_sources = HashMap::new();
     for path in &changed.paths {
         let source = repository.read_blob(&head_commit, path)?;
+        head_sources.insert(path.clone(), source.clone());
         match analyze_source_file(path, &source) {
             Ok(file) => {
                 head_files.insert(path.clone(), file);
@@ -195,19 +191,150 @@ pub(crate) fn check_mass(
         }
     }
 
+    for path in changed.paths.iter().filter(|path| path.ends_with(".rs")) {
+        let old_path = changed.renamed_from.get(path).unwrap_or(path);
+        let base_source = repository
+            .read_blob_if_exists(&base_commit, old_path)?
+            .unwrap_or_default();
+        let Some(head_source) = head_sources.get(path) else {
+            continue;
+        };
+        let added = added_line_numbers(
+            &line_hashes(base_source.as_bytes()),
+            &line_hashes(head_source.as_bytes()),
+            None,
+            &std::sync::atomic::AtomicBool::new(false),
+        )?;
+        changed
+            .added_lines
+            .insert(path.clone(), ChangedLineSet::from_lines(added));
+    }
+
     let head_paths = repository
         .source_files(&head_commit)?
         .into_iter()
         .collect::<HashSet<_>>();
-    let changed_base_paths = changed
-        .renamed_from
+    let mut function_report = evaluate_function_changes(
+        &artifact.files,
+        &head_files,
+        &head_paths,
+        &changed.paths,
+        &changed.renamed_from,
+        config,
+    );
+    report.findings.append(&mut function_report.findings);
+
+    for path in &changed.paths {
+        let Some(file) = head_files.get(path) else {
+            continue;
+        };
+        let source = repository.read_blob(&head_commit, path)?;
+        if file.language == "rust" {
+            let context = RustSurfaceContext {
+                repository,
+                base: &base_commit,
+                path,
+                renamed_from: changed.renamed_from.get(path.as_str()),
+                added_lines: changed.added_lines.get(path.as_str()),
+                source: &source,
+                config,
+            };
+            evaluate_rust_surfaces(&context, &mut report)?;
+        }
+    }
+    for path in &changed.cargo_paths {
+        evaluate_dependency_surface(
+            repository,
+            &base_commit,
+            path,
+            changed.renamed_from.get(path.as_str()),
+            &head_commit,
+            config,
+            &mut report,
+        )?;
+    }
+    if !report
+        .findings
+        .iter()
+        .any(|finding| finding.rule_id == "analysis-error")
+    {
+        let rust_head_files = repository
+            .rust_source_files(&head_commit)?
+            .into_iter()
+            .map(|path| {
+                repository
+                    .read_blob(&head_commit, &path)
+                    .and_then(|source| analyze_rust_file(&path, &source))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let rust_base_files = artifact
+            .files
+            .iter()
+            .filter(|file| file.language == "rust")
+            .cloned()
+            .collect::<Vec<_>>();
+        evaluate_structural_erosion(
+            &rust_head_files,
+            &rust_base_files,
+            &changed.renamed_from,
+            &changed.added_lines,
+            config,
+            &mut report,
+        );
+    }
+    report.findings.sort_by(finding_order);
+    Ok(report)
+}
+
+/// Evaluates changed source records against baseline facts without repository access.
+///
+/// This is the shared function-mass and near-clone rule engine used by both the
+/// Git command adapter and the explicit-snapshot application API.
+pub(crate) fn evaluate_function_changes(
+    baseline_files: &[crate::analysis::AnalyzedFile],
+    candidate_changed_files: &HashMap<String, crate::analysis::AnalyzedFile>,
+    candidate_paths: &HashSet<String>,
+    changed_paths: &[String],
+    renamed_from: &HashMap<String, String>,
+    config: &GateConfig,
+) -> CheckReport {
+    let base_functions = baseline_files
+        .iter()
+        .flat_map(|file| file.functions.iter())
+        .map(|function| (function.identity.clone(), function))
+        .collect::<HashMap<_, _>>();
+    let clone_index = build_clone_index(
+        baseline_files,
+        candidate_changed_files,
+        candidate_paths,
+        changed_paths,
+        renamed_from,
+    );
+    evaluate_changed_functions(
+        &base_functions,
+        candidate_changed_files,
+        changed_paths,
+        renamed_from,
+        config,
+        clone_index,
+    )
+}
+
+fn build_clone_index(
+    baseline_files: &[crate::analysis::AnalyzedFile],
+    candidate_changed_files: &HashMap<String, crate::analysis::AnalyzedFile>,
+    candidate_paths: &HashSet<String>,
+    changed_paths: &[String],
+    renamed_from: &HashMap<String, String>,
+) -> CloneIndex {
+    let changed_base_paths = renamed_from
         .values()
-        .chain(changed.paths.iter())
+        .chain(changed_paths.iter())
         .collect::<HashSet<_>>();
-    let head_functions_by_base_identity = head_files
+    let head_functions_by_base_identity = candidate_changed_files
         .values()
         .flat_map(|file| {
-            let previous_path = changed.renamed_from.get(&file.path);
+            let previous_path = renamed_from.get(&file.path);
             file.functions.iter().map(move |function| {
                 (
                     renamed_identity(&function.identity, previous_path),
@@ -216,19 +343,17 @@ pub(crate) fn check_mass(
             })
         })
         .collect::<HashMap<_, _>>();
-    let clone_candidates = artifact
-        .files
+    let clone_candidates = baseline_files
         .iter()
         .flat_map(|file| file.functions.iter())
         .filter_map(|base_function| {
-            let head_path = changed
-                .renamed_from
+            let head_path = renamed_from
                 .iter()
                 .find_map(|(new_path, old_path)| {
                     (old_path == &base_function.identity.path).then_some(new_path)
                 })
                 .unwrap_or(&base_function.identity.path);
-            if !head_paths.contains(head_path) {
+            if !candidate_paths.contains(head_path) {
                 return None;
             }
             if changed_base_paths.contains(&base_function.identity.path) {
@@ -240,37 +365,23 @@ pub(crate) fn check_mass(
             }
         })
         .collect::<Vec<_>>();
-    let mut clone_index = CloneIndex::from_functions(clone_candidates);
+    CloneIndex::from_functions(clone_candidates)
+}
 
-    for path in &changed.paths {
-        let Some(file) = head_files.get(path) else {
+fn evaluate_changed_functions(
+    base_functions: &HashMap<FunctionIdentity, &FunctionRecord>,
+    candidate_changed_files: &HashMap<String, crate::analysis::AnalyzedFile>,
+    changed_paths: &[String],
+    renamed_from: &HashMap<String, String>,
+    config: &GateConfig,
+    mut clone_index: CloneIndex,
+) -> CheckReport {
+    let mut report = CheckReport::default();
+    for path in changed_paths {
+        let Some(file) = candidate_changed_files.get(path) else {
             continue;
         };
-        let source = repository.read_blob(&head_commit, path)?;
-        if file.language == "rust" {
-            evaluate_lint_suppressions(
-                repository,
-                &base_commit,
-                path,
-                changed.renamed_from.get(path.as_str()),
-                changed.added_lines.get(path.as_str()),
-                &source,
-                config,
-                &mut report,
-            )?;
-            evaluate_unsafe_surface(
-                repository,
-                &base_commit,
-                path,
-                changed.renamed_from.get(path.as_str()),
-                changed.added_lines.get(path.as_str()),
-                &source,
-                config,
-                &mut report,
-            )?;
-        }
-        let _manifest_path_count = changed.cargo_paths.len();
-        let previous_path = changed.renamed_from.get(&file.path);
+        let previous_path = renamed_from.get(&file.path);
         for function in &file.functions {
             let base_identity = renamed_identity(&function.identity, previous_path);
             let base_function = base_functions.get(&base_identity).copied();
@@ -310,98 +421,8 @@ pub(crate) fn check_mass(
             clone_index.insert(function.clone());
         }
     }
-    for path in &changed.cargo_paths {
-        evaluate_dependency_surface(
-            repository,
-            &base_commit,
-            path,
-            changed.renamed_from.get(path.as_str()),
-            &head_commit,
-            config,
-            &mut report,
-        )?;
-    }
-    if !report
-        .findings
-        .iter()
-        .any(|finding| finding.rule_id == "analysis-error")
-    {
-        let rust_head_files = repository
-            .rust_source_files(&head_commit)?
-            .into_iter()
-            .map(|path| {
-                repository
-                    .read_blob(&head_commit, &path)
-                    .and_then(|source| analyze_rust_file(&path, &source))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let policy = &config.rules.structural_erosion;
-        let rust_base_files = artifact
-            .files
-            .iter()
-            .filter(|file| file.language == "rust")
-            .cloned()
-            .collect::<Vec<_>>();
-        let head_summary =
-            RepositorySummary::from_files_with_cutoff(&rust_head_files, policy.complexity_cutoff);
-        let base_summary =
-            RepositorySummary::from_files_with_cutoff(&rust_base_files, policy.complexity_cutoff);
-        let delta = head_summary.erosion_ratio - base_summary.erosion_ratio;
-        // The ratio alone cannot separate "added complexity" from "deleted
-        // easy code": removing low-complexity code shrinks the denominator and
-        // raises the ratio. Growth of the absolute high-complexity mass is
-        // immune to that and is compared alongside the ratio.
-        let mass_growth = mass_growth(
-            base_summary.high_complexity_mass,
-            head_summary.high_complexity_mass,
-        );
-        let breaches = erosion_breaches(
-            &head_summary,
-            delta,
-            mass_growth,
-            policy.erosion_limit,
-            policy.delta_limit,
-            policy.mass_growth_limit,
-        );
-        if !breaches.is_empty() {
-            let by_cutoff = CUTOFF_DISTRIBUTION
-                .iter()
-                .map(|cutoff| {
-                    (
-                        cutoff.to_string(),
-                        format!(
-                            "{:.6}",
-                            RepositorySummary::from_files_with_cutoff(&rust_head_files, *cutoff)
-                                .erosion_ratio
-                        ),
-                    )
-                })
-                .collect::<BTreeMap<_, _>>();
-            push_if_enabled(
-                &mut report,
-                erosion_finding(ErosionFindingInput {
-                    head_files: &rust_head_files,
-                    base_functions: &base_functions,
-                    renamed_from: &changed.renamed_from,
-                    added_lines: &changed.added_lines,
-                    head: &head_summary,
-                    base: &base_summary,
-                    delta,
-                    mass_growth,
-                    breaches,
-                    erosion_by_cutoff: by_cutoff,
-                    erosion_limit: policy.erosion_limit,
-                    delta_limit: policy.delta_limit,
-                    mass_growth_limit: policy.mass_growth_limit,
-                    complexity_cutoff: policy.complexity_cutoff,
-                    top_contributors: policy.top_contributors,
-                }),
-                config,
-            );
-        }
-    }
     report.findings.sort_by(finding_order);
-    Ok(report)
+    report
 }
 
 /// Renders a report as stable human-readable text.
@@ -494,6 +515,11 @@ fn renamed_identity(
 }
 
 fn new_function_finding(function: &FunctionRecord, threshold: f64) -> Finding {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "qualified_name".to_string(),
+        function.identity.qualified_name.clone(),
+    );
     Finding {
         rule_id: "function-mass".to_string(),
         severity: Severity::Error,
@@ -511,7 +537,7 @@ fn new_function_finding(function: &FunctionRecord, threshold: f64) -> Finding {
         delta: None,
         threshold: Some(threshold),
         similarity: None,
-        properties: BTreeMap::new(),
+        properties,
     }
 }
 
@@ -521,6 +547,11 @@ fn delta_finding(
     delta: f64,
     threshold: f64,
 ) -> Finding {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "qualified_name".to_string(),
+        head.identity.qualified_name.clone(),
+    );
     Finding {
         rule_id: "function-mass".to_string(),
         severity: Severity::Error,
@@ -541,7 +572,7 @@ fn delta_finding(
         delta: Some(delta),
         threshold: Some(threshold),
         similarity: None,
-        properties: BTreeMap::new(),
+        properties,
     }
 }
 
@@ -934,8 +965,48 @@ fn erosion_finding(input: ErosionFindingInput<'_>) -> Finding {
     }
 }
 
+struct RustSurfaceContext<'a> {
+    repository: &'a GitRepository,
+    base: &'a str,
+    path: &'a str,
+    renamed_from: Option<&'a String>,
+    added_lines: Option<&'a ChangedLineSet>,
+    source: &'a str,
+    config: &'a GateConfig,
+}
+
+fn evaluate_rust_surfaces(
+    context: &RustSurfaceContext<'_>,
+    report: &mut CheckReport,
+) -> Result<()> {
+    evaluate_rust_surface_records(
+        context.repository,
+        context.base,
+        context.path,
+        context.renamed_from,
+        context.added_lines,
+        context.source,
+        context.config,
+        report,
+        lint_suppressions,
+        evaluate_lint_suppression_records,
+    )?;
+    evaluate_rust_surface_records(
+        context.repository,
+        context.base,
+        context.path,
+        context.renamed_from,
+        context.added_lines,
+        context.source,
+        context.config,
+        report,
+        unsafe_surface,
+        evaluate_unsafe_surface_records,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
-fn evaluate_lint_suppressions(
+fn evaluate_rust_surface_records<T>(
     repository: &GitRepository,
     base: &str,
     path: &str,
@@ -944,17 +1015,31 @@ fn evaluate_lint_suppressions(
     head_source: &str,
     config: &GateConfig,
     report: &mut CheckReport,
+    extract: fn(&str, &str) -> Result<Vec<T>>,
+    evaluate: fn(&str, &[T], &[T], &ChangedLineSet, &GateConfig, &mut CheckReport),
 ) -> Result<()> {
     let Some(added_lines) = added_lines else {
         return Ok(());
     };
-    let head_facts = lint_suppressions(path, head_source)?;
     let base_path = renamed_from.map_or(path, String::as_str);
     let base_facts = repository
         .read_blob_if_exists(base, base_path)?
-        .map(|source| lint_suppressions(base_path, &source))
+        .map(|source| extract(base_path, &source))
         .transpose()?
         .unwrap_or_default();
+    let head_facts = extract(path, head_source)?;
+    evaluate(path, &head_facts, &base_facts, added_lines, config, report);
+    Ok(())
+}
+
+pub(crate) fn evaluate_lint_suppression_records(
+    path: &str,
+    head_facts: &[crate::analysis::LintSuppression],
+    base_facts: &[crate::analysis::LintSuppression],
+    added_lines: &ChangedLineSet,
+    config: &GateConfig,
+    report: &mut CheckReport,
+) {
     for fact in head_facts {
         if !added_lines.contains(fact.line) {
             continue;
@@ -1005,34 +1090,22 @@ fn evaluate_lint_suppressions(
             config,
         );
     }
-    Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn evaluate_unsafe_surface(
-    repository: &GitRepository,
-    base: &str,
+pub(crate) fn evaluate_unsafe_surface_records(
     path: &str,
-    renamed_from: Option<&String>,
-    added_lines: Option<&ChangedLineSet>,
-    source: &str,
+    head_facts: &[crate::analysis::UnsafeSurface],
+    base_facts: &[crate::analysis::UnsafeSurface],
+    added_lines: &ChangedLineSet,
     config: &GateConfig,
     report: &mut CheckReport,
-) -> Result<()> {
-    let Some(added_lines) = added_lines else {
-        return Ok(());
-    };
-    let base_path = renamed_from.map_or(path, String::as_str);
-    let mut base_facts = repository
-        .read_blob_if_exists(base, base_path)?
-        .map(|source| unsafe_surface(base_path, &source))
-        .transpose()?
-        .unwrap_or_default();
-    let head_facts = unsafe_surface(path, source)?;
+) {
     let pending = head_facts
-        .into_iter()
+        .iter()
         .filter(|fact| added_lines.contains(fact.line))
+        .cloned()
         .collect::<Vec<_>>();
+    let mut base_facts = base_facts.to_vec();
     let mut unmatched = Vec::new();
     for fact in &pending {
         if let Some(position) = base_facts.iter().position(|base| {
@@ -1078,7 +1151,6 @@ fn evaluate_unsafe_surface(
             config,
         );
     }
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1099,13 +1171,24 @@ fn evaluate_dependency_surface(
         .map(|source| dependency_edges(&source))
         .transpose()?
         .unwrap_or_default();
+    evaluate_dependency_edges(path, &head_edges, &base_edges, config, report);
+    Ok(())
+}
+
+pub(crate) fn evaluate_dependency_edges(
+    path: &str,
+    head_edges: &[crate::analysis::DependencyEdge],
+    base_edges: &[crate::analysis::DependencyEdge],
+    config: &GateConfig,
+    report: &mut CheckReport,
+) {
     for edge in head_edges {
         let base_edge = base_edges.iter().find(|candidate| {
             candidate.table_path == edge.table_path
                 && candidate.dependency_key == edge.dependency_key
         });
         let Some(base_edge) = base_edge else {
-            dependency_finding(report, path, &edge, "new-dependency", config);
+            dependency_finding(report, path, edge, "new-dependency", config);
             continue;
         };
         let features_expanded = edge
@@ -1117,10 +1200,82 @@ fn evaluate_dependency_surface(
             || base_edge.source_kind != edge.source_kind
             || base_edge.source != edge.source;
         if features_expanded || defaults_expanded || declaration_expanded {
-            dependency_finding(report, path, &edge, "expanded-dependency-surface", config);
+            dependency_finding(report, path, edge, "expanded-dependency-surface", config);
         }
     }
-    Ok(())
+}
+
+/// Evaluates structural erosion from complete Rust records without repository access.
+pub(crate) fn evaluate_structural_erosion(
+    head_files: &[crate::analysis::AnalyzedFile],
+    base_files: &[crate::analysis::AnalyzedFile],
+    renamed_from: &HashMap<String, String>,
+    added_lines: &HashMap<String, ChangedLineSet>,
+    config: &GateConfig,
+    report: &mut CheckReport,
+) {
+    if config.rules.structural_erosion.severity == RuleSeverity::Off {
+        return;
+    }
+    let policy = &config.rules.structural_erosion;
+    let base_functions = base_files
+        .iter()
+        .flat_map(|file| file.functions.iter())
+        .map(|function| (function.identity.clone(), function))
+        .collect::<HashMap<_, _>>();
+    let head_summary =
+        RepositorySummary::from_files_with_cutoff(head_files, policy.complexity_cutoff);
+    let base_summary =
+        RepositorySummary::from_files_with_cutoff(base_files, policy.complexity_cutoff);
+    let delta = head_summary.erosion_ratio - base_summary.erosion_ratio;
+    let mass_growth = mass_growth(
+        base_summary.high_complexity_mass,
+        head_summary.high_complexity_mass,
+    );
+    let breaches = erosion_breaches(
+        &head_summary,
+        delta,
+        mass_growth,
+        policy.erosion_limit,
+        policy.delta_limit,
+        policy.mass_growth_limit,
+    );
+    if breaches.is_empty() {
+        return;
+    }
+    let by_cutoff = CUTOFF_DISTRIBUTION
+        .iter()
+        .map(|cutoff| {
+            (
+                cutoff.to_string(),
+                format!(
+                    "{:.6}",
+                    RepositorySummary::from_files_with_cutoff(head_files, *cutoff).erosion_ratio
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    push_if_enabled(
+        report,
+        erosion_finding(ErosionFindingInput {
+            head_files,
+            base_functions: &base_functions,
+            renamed_from,
+            added_lines,
+            head: &head_summary,
+            base: &base_summary,
+            delta,
+            mass_growth,
+            breaches,
+            erosion_by_cutoff: by_cutoff,
+            erosion_limit: policy.erosion_limit,
+            delta_limit: policy.delta_limit,
+            mass_growth_limit: policy.mass_growth_limit,
+            complexity_cutoff: policy.complexity_cutoff,
+            top_contributors: policy.top_contributors,
+        }),
+        config,
+    );
 }
 
 fn dependency_finding(

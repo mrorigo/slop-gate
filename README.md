@@ -178,8 +178,11 @@ changing requires a rebuilt artifact, and the failure names both versions:
   0.4.0, this is slop-gate 0.5.0; rebuild the index with `slop-gate index`
 
 The workflow prints the resolved version before it runs the gate, so a drifted
-SLOP_GATE_RELEASE is visible in the first lines of the log. The reference GitHub Actions
-workflow is [`.github/workflows/slop-gate.yml`](.github/workflows/slop-gate.yml).
+SLOP_GATE_RELEASE is visible in the first lines of the log. Its cache key includes
+both the exact base commit and resolved Slop Gate version, so an index built by
+an older release is not restored. A cache miss rebuilds the index with the
+installed version. The reference GitHub Actions workflow is
+[`.github/workflows/slop-gate.yml`](.github/workflows/slop-gate.yml).
 It downloads and verifies the latest published Linux binary, so copying the
 workflow into another repository does not require adding Slop Gate to that
 repository's Cargo workspace. Set `SLOP_GATE_RELEASE` to a release tag to pin

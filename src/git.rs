@@ -322,6 +322,13 @@ pub struct ChangedLineSet {
 }
 
 impl ChangedLineSet {
+    /// Constructs a line set from one-based candidate line numbers.
+    pub(crate) fn from_lines(lines: impl IntoIterator<Item = usize>) -> Self {
+        Self {
+            lines: lines.into_iter().collect(),
+        }
+    }
+
     /// Returns whether a one-based head line is included.
     pub fn contains(&self, line: usize) -> bool {
         self.lines.contains(&line)
