@@ -745,23 +745,21 @@ fn evaluate_rust_rules(
     let head_lint = group_facts(&candidate.lint_suppressions, |fact| fact.path.as_str());
     let base_unsafe = group_facts(&baseline.unsafe_constructs, |fact| fact.path.as_str());
     let head_unsafe = group_facts(&candidate.unsafe_constructs, |fact| fact.path.as_str());
+    let context = RustPathContext {
+        base_entries: &base_entries,
+        candidate_entries: &candidate_entries,
+        base_lint: &base_lint,
+        head_lint: &head_lint,
+        base_unsafe: &base_unsafe,
+        head_unsafe: &head_unsafe,
+        policy,
+        cancelled,
+        limits,
+    };
     let mut diffs = RustDiffs::default();
     for path in manifest.changed.iter().filter(|path| path.ends_with(".rs")) {
         let old_path = manifest.renamed_from.get(path).unwrap_or(path);
-        let result = evaluate_rust_path(
-            path,
-            old_path,
-            &base_entries,
-            &candidate_entries,
-            &base_lint,
-            &head_lint,
-            &base_unsafe,
-            &head_unsafe,
-            policy,
-            cancelled,
-            limits,
-            report,
-        );
+        let result = evaluate_rust_path(path, old_path, &context, report);
         match result {
             Ok(added) => {
                 diffs.added.insert(path.clone(), added);
@@ -799,110 +797,107 @@ fn group_facts<'a, T>(
     grouped
 }
 
-#[allow(clippy::too_many_arguments)]
+struct RustPathContext<'a> {
+    base_entries: &'a EntryMap<'a>,
+    candidate_entries: &'a EntryMap<'a>,
+    base_lint: &'a LintFactMap<'a>,
+    head_lint: &'a LintFactMap<'a>,
+    base_unsafe: &'a UnsafeFactMap<'a>,
+    head_unsafe: &'a UnsafeFactMap<'a>,
+    policy: &'a Policy,
+    cancelled: &'a AtomicBool,
+    limits: ResourceLimits,
+}
+
 fn evaluate_rust_path(
     path: &str,
     old_path: &str,
-    base_entries: &EntryMap<'_>,
-    candidate_entries: &EntryMap<'_>,
-    base_lint: &LintFactMap<'_>,
-    head_lint: &LintFactMap<'_>,
-    base_unsafe: &UnsafeFactMap<'_>,
-    head_unsafe: &UnsafeFactMap<'_>,
-    policy: &Policy,
-    cancelled: &AtomicBool,
-    limits: ResourceLimits,
+    context: &RustPathContext<'_>,
     report: &mut crate::gate::CheckReport,
 ) -> Result<ChangedLineSet> {
-    let old_lines = base_entries
+    let old_lines = context
+        .base_entries
         .get(old_path)
         .map_or(&[][..], |entry| entry.line_hashes.as_slice());
-    let new_lines = candidate_entries
+    let new_lines = context
+        .candidate_entries
         .get(path)
         .map_or(&[][..], |entry| entry.line_hashes.as_slice());
     let added = ChangedLineSet::from_lines(added_line_numbers(
         old_lines,
         new_lines,
-        limits.max_diff_cells,
-        cancelled,
+        context.limits.max_diff_cells,
+        context.cancelled,
     )?);
-    evaluate_rust_suppression_growth(path, old_path, &added, base_lint, head_lint, policy, report);
-    evaluate_rust_unsafe_growth(
+    let (head_lint, base_lint) = surface_records(
         path,
         old_path,
+        context.head_lint,
+        context.base_lint,
+        lint_record,
+    );
+    evaluate_lint_suppression_records(
+        path,
+        &head_lint,
+        &base_lint,
         &added,
-        base_unsafe,
-        head_unsafe,
-        policy,
+        &context.policy.config,
+        report,
+    );
+    let (head_unsafe, base_unsafe) = surface_records(
+        path,
+        old_path,
+        context.head_unsafe,
+        context.base_unsafe,
+        unsafe_record,
+    );
+    evaluate_unsafe_surface_records(
+        path,
+        &head_unsafe,
+        &base_unsafe,
+        &added,
+        &context.policy.config,
         report,
     );
     Ok(added)
 }
 
-fn evaluate_rust_suppression_growth(
+fn surface_records<T, R>(
     path: &str,
     old_path: &str,
-    added: &ChangedLineSet,
-    base: &LintFactMap<'_>,
-    head: &LintFactMap<'_>,
-    policy: &Policy,
-    report: &mut crate::gate::CheckReport,
-) {
-    let base_facts = base.get(old_path).map(Vec::as_slice).unwrap_or_default();
-    let head_facts = head.get(path).map(Vec::as_slice).unwrap_or_default();
-    evaluate_lint_suppression_records(
-        path,
-        &lint_records(head_facts),
-        &lint_records(base_facts),
-        added,
-        &policy.config,
-        report,
-    );
+    head: &HashMap<&str, Vec<&T>>,
+    base: &HashMap<&str, Vec<&T>>,
+    convert: fn(&T) -> R,
+) -> (Vec<R>, Vec<R>) {
+    let convert_facts = |facts: Option<&Vec<&T>>| {
+        facts
+            .into_iter()
+            .flatten()
+            .map(|fact| convert(fact))
+            .collect()
+    };
+    (
+        convert_facts(head.get(path)),
+        convert_facts(base.get(old_path)),
+    )
 }
 
-fn lint_records(facts: &[&SnapshotLintSuppression]) -> Vec<crate::analysis::LintSuppression> {
-    facts
-        .iter()
-        .map(|fact| crate::analysis::LintSuppression {
-            kind: fact.kind.clone(),
-            lint_paths: fact.lint_paths.clone(),
-            target_fingerprint: fact.target_fingerprint.clone(),
-            target_kind: fact.target_kind.clone(),
-            line: fact.line,
-        })
-        .collect()
+fn lint_record(fact: &SnapshotLintSuppression) -> crate::analysis::LintSuppression {
+    crate::analysis::LintSuppression {
+        kind: fact.kind.clone(),
+        lint_paths: fact.lint_paths.clone(),
+        target_fingerprint: fact.target_fingerprint.clone(),
+        target_kind: fact.target_kind.clone(),
+        line: fact.line,
+    }
 }
 
-fn evaluate_rust_unsafe_growth(
-    path: &str,
-    old_path: &str,
-    added: &ChangedLineSet,
-    base: &UnsafeFactMap<'_>,
-    head: &UnsafeFactMap<'_>,
-    policy: &Policy,
-    report: &mut crate::gate::CheckReport,
-) {
-    let base_facts = base.get(old_path).map(Vec::as_slice).unwrap_or_default();
-    let head_facts = head.get(path).map(Vec::as_slice).unwrap_or_default();
-    evaluate_unsafe_surface_records(
-        path,
-        &unsafe_records(head_facts),
-        &unsafe_records(base_facts),
-        added,
-        &policy.config,
-        report,
-    );
-}
-
-fn unsafe_records(facts: &[&SnapshotUnsafeConstruct]) -> Vec<crate::analysis::UnsafeSurface> {
-    facts
-        .iter()
-        .map(|fact| crate::analysis::UnsafeSurface {
-            pattern_id: fact.pattern_id.clone(),
-            fingerprint: fact.fingerprint.clone(),
-            line: fact.line,
-        })
-        .collect()
+fn unsafe_record(fact: &SnapshotUnsafeConstruct) -> crate::analysis::UnsafeSurface {
+    crate::analysis::UnsafeSurface {
+        pattern_id: fact.pattern_id.clone(),
+        fingerprint: fact.fingerprint.clone(),
+        line: fact.line,
+    }
 }
 
 fn evaluate_dependency_rules(
