@@ -175,7 +175,7 @@ version, and a build-script fingerprint of the analyzer sources. Any of those
 changing requires a rebuilt artifact, and the failure names both versions:
 
   slop-gate check: invalid artifact tool version: index was built by slop-gate
-  0.4.0, this is slop-gate 0.5.0; rebuild the index with `slop-gate index`
+  0.6.0, this is slop-gate 0.7.0; rebuild the index with `slop-gate index`
 
 The workflow prints the resolved version before it runs the gate, so a drifted
 SLOP_GATE_RELEASE is visible in the first lines of the log. Its cache key includes
