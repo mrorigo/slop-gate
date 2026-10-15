@@ -5,8 +5,10 @@
 #![forbid(unsafe_code)]
 
 pub mod analysis;
+pub mod api;
 pub mod cli;
 mod config;
+mod diff;
 mod error;
 mod gate;
 mod git;

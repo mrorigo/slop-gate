@@ -11,6 +11,7 @@ use crate::analysis::{
 };
 use crate::analysis::{dependency_edges, lint_suppressions, unsafe_surface};
 use crate::config::{GateConfig, NearCloneRule, RuleSeverity};
+use crate::diff::{added_line_numbers, line_hashes};
 use crate::error::{Error, Result};
 use crate::git::{ChangedLineSet, GitRepository};
 
@@ -155,21 +156,23 @@ pub(crate) fn check_mass(
     };
     artifact.validate_with_fingerprint(&expected_fingerprint)?;
     let head_commit = repository.resolve_revision(head)?;
-    let changed = repository.changed_source_files(&base_commit, &head_commit)?;
+    let mut changed = repository.changed_source_files(&base_commit, &head_commit)?;
     let base_functions = artifact
         .files
         .iter()
         .flat_map(|file| file.functions.iter())
         .map(|function| (function.identity.clone(), function))
         .collect::<HashMap<_, _>>();
-    let mut report = CheckReport::default();
 
     // Analyze changed files before building clone candidates so candidates
     // represent declarations that still exist in HEAD. Baseline records are
     // retained separately for mass-delta comparisons below.
+    let mut report = CheckReport::default();
     let mut head_files = HashMap::new();
+    let mut head_sources = HashMap::new();
     for path in &changed.paths {
         let source = repository.read_blob(&head_commit, path)?;
+        head_sources.insert(path.clone(), source.clone());
         match analyze_source_file(path, &source) {
             Ok(file) => {
                 head_files.insert(path.clone(), file);
@@ -195,52 +198,38 @@ pub(crate) fn check_mass(
         }
     }
 
+    for path in changed.paths.iter().filter(|path| path.ends_with(".rs")) {
+        let old_path = changed.renamed_from.get(path).unwrap_or(path);
+        let base_source = repository
+            .read_blob_if_exists(&base_commit, old_path)?
+            .unwrap_or_default();
+        let Some(head_source) = head_sources.get(path) else {
+            continue;
+        };
+        let added = added_line_numbers(
+            &line_hashes(base_source.as_bytes()),
+            &line_hashes(head_source.as_bytes()),
+            None,
+            &std::sync::atomic::AtomicBool::new(false),
+        )?;
+        changed
+            .added_lines
+            .insert(path.clone(), ChangedLineSet::from_lines(added));
+    }
+
     let head_paths = repository
         .source_files(&head_commit)?
         .into_iter()
         .collect::<HashSet<_>>();
-    let changed_base_paths = changed
-        .renamed_from
-        .values()
-        .chain(changed.paths.iter())
-        .collect::<HashSet<_>>();
-    let head_functions_by_base_identity = head_files
-        .values()
-        .flat_map(|file| {
-            let previous_path = changed.renamed_from.get(&file.path);
-            file.functions.iter().map(move |function| {
-                (
-                    renamed_identity(&function.identity, previous_path),
-                    function,
-                )
-            })
-        })
-        .collect::<HashMap<_, _>>();
-    let clone_candidates = artifact
-        .files
-        .iter()
-        .flat_map(|file| file.functions.iter())
-        .filter_map(|base_function| {
-            let head_path = changed
-                .renamed_from
-                .iter()
-                .find_map(|(new_path, old_path)| {
-                    (old_path == &base_function.identity.path).then_some(new_path)
-                })
-                .unwrap_or(&base_function.identity.path);
-            if !head_paths.contains(head_path) {
-                return None;
-            }
-            if changed_base_paths.contains(&base_function.identity.path) {
-                head_functions_by_base_identity
-                    .get(&base_function.identity)
-                    .map(|function| (*function).clone())
-            } else {
-                Some(base_function.clone())
-            }
-        })
-        .collect::<Vec<_>>();
-    let mut clone_index = CloneIndex::from_functions(clone_candidates);
+    let mut function_report = evaluate_function_changes(
+        &artifact.files,
+        &head_files,
+        &head_paths,
+        &changed.paths,
+        &changed.renamed_from,
+        config,
+    );
+    report.findings.append(&mut function_report.findings);
 
     for path in &changed.paths {
         let Some(file) = head_files.get(path) else {
@@ -268,46 +257,6 @@ pub(crate) fn check_mass(
                 config,
                 &mut report,
             )?;
-        }
-        let _manifest_path_count = changed.cargo_paths.len();
-        let previous_path = changed.renamed_from.get(&file.path);
-        for function in &file.functions {
-            let base_identity = renamed_identity(&function.identity, previous_path);
-            let base_function = base_functions.get(&base_identity).copied();
-            let materially_changed =
-                base_function.is_none_or(|base| function.normalized_hash != base.normalized_hash);
-            if let Some(base_function) = base_function {
-                if !materially_changed {
-                    clone_index.insert(function.clone());
-                    continue;
-                }
-                let delta = function.mass - base_function.mass;
-                if delta > config.rules.function_mass.delta_limit {
-                    push_if_enabled(
-                        &mut report,
-                        delta_finding(
-                            function,
-                            base_function,
-                            delta,
-                            config.rules.function_mass.delta_limit,
-                        ),
-                        config,
-                    );
-                }
-            } else if function.mass > config.rules.function_mass.new_function_limit {
-                push_if_enabled(
-                    &mut report,
-                    new_function_finding(function, config.rules.function_mass.new_function_limit),
-                    config,
-                );
-            }
-            if materially_changed {
-                for (finding, _) in clone_matches(function, &clone_index, &config.rules.near_clone)
-                {
-                    push_if_enabled(&mut report, finding, config);
-                }
-            }
-            clone_index.insert(function.clone());
         }
     }
     for path in &changed.cargo_paths {
@@ -404,6 +353,111 @@ pub(crate) fn check_mass(
     Ok(report)
 }
 
+/// Evaluates changed source records against baseline facts without repository access.
+///
+/// This is the shared function-mass and near-clone rule engine used by both the
+/// Git command adapter and the explicit-snapshot application API.
+pub(crate) fn evaluate_function_changes(
+    baseline_files: &[crate::analysis::AnalyzedFile],
+    candidate_changed_files: &HashMap<String, crate::analysis::AnalyzedFile>,
+    candidate_paths: &HashSet<String>,
+    changed_paths: &[String],
+    renamed_from: &HashMap<String, String>,
+    config: &GateConfig,
+) -> CheckReport {
+    let base_functions = baseline_files
+        .iter()
+        .flat_map(|file| file.functions.iter())
+        .map(|function| (function.identity.clone(), function))
+        .collect::<HashMap<_, _>>();
+    let changed_base_paths = renamed_from
+        .values()
+        .chain(changed_paths.iter())
+        .collect::<HashSet<_>>();
+    let head_functions_by_base_identity = candidate_changed_files
+        .values()
+        .flat_map(|file| {
+            let previous_path = renamed_from.get(&file.path);
+            file.functions.iter().map(move |function| {
+                (
+                    renamed_identity(&function.identity, previous_path),
+                    function,
+                )
+            })
+        })
+        .collect::<HashMap<_, _>>();
+    let clone_candidates = baseline_files
+        .iter()
+        .flat_map(|file| file.functions.iter())
+        .filter_map(|base_function| {
+            let head_path = renamed_from
+                .iter()
+                .find_map(|(new_path, old_path)| {
+                    (old_path == &base_function.identity.path).then_some(new_path)
+                })
+                .unwrap_or(&base_function.identity.path);
+            if !candidate_paths.contains(head_path) {
+                return None;
+            }
+            if changed_base_paths.contains(&base_function.identity.path) {
+                head_functions_by_base_identity
+                    .get(&base_function.identity)
+                    .map(|function| (*function).clone())
+            } else {
+                Some(base_function.clone())
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut clone_index = CloneIndex::from_functions(clone_candidates);
+    let mut report = CheckReport::default();
+    for path in changed_paths {
+        let Some(file) = candidate_changed_files.get(path) else {
+            continue;
+        };
+        let previous_path = renamed_from.get(&file.path);
+        for function in &file.functions {
+            let base_identity = renamed_identity(&function.identity, previous_path);
+            let base_function = base_functions.get(&base_identity).copied();
+            let materially_changed =
+                base_function.is_none_or(|base| function.normalized_hash != base.normalized_hash);
+            if let Some(base_function) = base_function {
+                if !materially_changed {
+                    clone_index.insert(function.clone());
+                    continue;
+                }
+                let delta = function.mass - base_function.mass;
+                if delta > config.rules.function_mass.delta_limit {
+                    push_if_enabled(
+                        &mut report,
+                        delta_finding(
+                            function,
+                            base_function,
+                            delta,
+                            config.rules.function_mass.delta_limit,
+                        ),
+                        config,
+                    );
+                }
+            } else if function.mass > config.rules.function_mass.new_function_limit {
+                push_if_enabled(
+                    &mut report,
+                    new_function_finding(function, config.rules.function_mass.new_function_limit),
+                    config,
+                );
+            }
+            if materially_changed {
+                for (finding, _) in clone_matches(function, &clone_index, &config.rules.near_clone)
+                {
+                    push_if_enabled(&mut report, finding, config);
+                }
+            }
+            clone_index.insert(function.clone());
+        }
+    }
+    report.findings.sort_by(finding_order);
+    report
+}
+
 /// Renders a report as stable human-readable text.
 pub(crate) fn render_human(report: &CheckReport) -> String {
     if report.findings.is_empty() {
@@ -494,6 +548,11 @@ fn renamed_identity(
 }
 
 fn new_function_finding(function: &FunctionRecord, threshold: f64) -> Finding {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "qualified_name".to_string(),
+        function.identity.qualified_name.clone(),
+    );
     Finding {
         rule_id: "function-mass".to_string(),
         severity: Severity::Error,
@@ -511,7 +570,7 @@ fn new_function_finding(function: &FunctionRecord, threshold: f64) -> Finding {
         delta: None,
         threshold: Some(threshold),
         similarity: None,
-        properties: BTreeMap::new(),
+        properties,
     }
 }
 
@@ -521,6 +580,11 @@ fn delta_finding(
     delta: f64,
     threshold: f64,
 ) -> Finding {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "qualified_name".to_string(),
+        head.identity.qualified_name.clone(),
+    );
     Finding {
         rule_id: "function-mass".to_string(),
         severity: Severity::Error,
@@ -541,7 +605,7 @@ fn delta_finding(
         delta: Some(delta),
         threshold: Some(threshold),
         similarity: None,
-        properties: BTreeMap::new(),
+        properties,
     }
 }
 
@@ -955,6 +1019,18 @@ fn evaluate_lint_suppressions(
         .map(|source| lint_suppressions(base_path, &source))
         .transpose()?
         .unwrap_or_default();
+    evaluate_lint_suppression_records(path, &head_facts, &base_facts, added_lines, config, report);
+    Ok(())
+}
+
+pub(crate) fn evaluate_lint_suppression_records(
+    path: &str,
+    head_facts: &[crate::analysis::LintSuppression],
+    base_facts: &[crate::analysis::LintSuppression],
+    added_lines: &ChangedLineSet,
+    config: &GateConfig,
+    report: &mut CheckReport,
+) {
     for fact in head_facts {
         if !added_lines.contains(fact.line) {
             continue;
@@ -1005,7 +1081,6 @@ fn evaluate_lint_suppressions(
             config,
         );
     }
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1023,16 +1098,30 @@ fn evaluate_unsafe_surface(
         return Ok(());
     };
     let base_path = renamed_from.map_or(path, String::as_str);
-    let mut base_facts = repository
+    let base_facts = repository
         .read_blob_if_exists(base, base_path)?
         .map(|source| unsafe_surface(base_path, &source))
         .transpose()?
         .unwrap_or_default();
     let head_facts = unsafe_surface(path, source)?;
+    evaluate_unsafe_surface_records(path, &head_facts, &base_facts, added_lines, config, report);
+    Ok(())
+}
+
+pub(crate) fn evaluate_unsafe_surface_records(
+    path: &str,
+    head_facts: &[crate::analysis::UnsafeSurface],
+    base_facts: &[crate::analysis::UnsafeSurface],
+    added_lines: &ChangedLineSet,
+    config: &GateConfig,
+    report: &mut CheckReport,
+) {
     let pending = head_facts
-        .into_iter()
+        .iter()
         .filter(|fact| added_lines.contains(fact.line))
+        .cloned()
         .collect::<Vec<_>>();
+    let mut base_facts = base_facts.to_vec();
     let mut unmatched = Vec::new();
     for fact in &pending {
         if let Some(position) = base_facts.iter().position(|base| {
@@ -1078,7 +1167,6 @@ fn evaluate_unsafe_surface(
             config,
         );
     }
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

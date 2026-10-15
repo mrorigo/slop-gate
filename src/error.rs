@@ -34,6 +34,35 @@ pub enum AppError {
         /// A concrete explanation suitable for a CLI diagnostic.
         detail: String,
     },
+    /// A caller-supplied policy is malformed or violates policy constraints.
+    #[error("invalid policy: {0}")]
+    InvalidPolicy(String),
+    /// A caller-supplied source snapshot or change manifest is inconsistent.
+    #[error("invalid snapshot: {0}")]
+    InvalidSnapshot(String),
+    /// A baseline cannot be reused under the current schema or fingerprints.
+    #[error("incompatible baseline: {0}")]
+    IncompatibleBaseline(String),
+    /// Snapshot index persistence failed.
+    #[error("snapshot index persistence failed: {0}")]
+    Persistence(String),
+    /// A relevant source file failed parsing during analysis.
+    #[error("source parse failed for {path}: {detail}")]
+    ParseFailure {
+        /// Repository-relative source path.
+        path: String,
+        /// Parser or decoder diagnostic.
+        detail: String,
+    },
+    /// Required input could not be analyzed under its declared entry kind.
+    #[error("unsupported required input: {0}")]
+    UnsupportedRequiredInput(String),
+    /// A caller-supplied analysis budget was exhausted.
+    #[error("analysis budget exceeded: {0}")]
+    BudgetExceeded(String),
+    /// Analysis was cancelled by the caller.
+    #[error("analysis cancelled")]
+    Cancelled,
     /// A parser, serializer, or external command produced invalid UTF-8 text.
     #[error("invalid UTF-8 in {subject}: {detail}")]
     Utf8 {

@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-const ANALYZER_INPUTS: [&str; 8] = [
+const ANALYZER_INPUTS: [&str; 12] = [
     "Cargo.toml",
     "Cargo.lock",
     "src/analysis/extract.rs",
@@ -21,6 +21,10 @@ const ANALYZER_INPUTS: [&str; 8] = [
     "src/analysis/model.rs",
     "src/analysis/artifact.rs",
     "src/analysis/mod.rs",
+    "src/api.rs",
+    "src/config.rs",
+    "src/gate.rs",
+    "src/diff.rs",
 ];
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
