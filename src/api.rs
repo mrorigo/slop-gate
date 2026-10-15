@@ -741,10 +741,10 @@ fn evaluate_rust_rules(
 ) -> RustDiffs {
     let base_entries = entry_map(&baseline.entries);
     let candidate_entries = entry_map(&candidate.entries);
-    let base_lint = group_lint_suppressions(&baseline.lint_suppressions);
-    let head_lint = group_lint_suppressions(&candidate.lint_suppressions);
-    let base_unsafe = group_unsafe_facts(&baseline.unsafe_constructs);
-    let head_unsafe = group_unsafe_facts(&candidate.unsafe_constructs);
+    let base_lint = group_facts(&baseline.lint_suppressions, |fact| fact.path.as_str());
+    let head_lint = group_facts(&candidate.lint_suppressions, |fact| fact.path.as_str());
+    let base_unsafe = group_facts(&baseline.unsafe_constructs, |fact| fact.path.as_str());
+    let head_unsafe = group_facts(&candidate.unsafe_constructs, |fact| fact.path.as_str());
     let mut diffs = RustDiffs::default();
     for path in manifest.changed.iter().filter(|path| path.ends_with(".rs")) {
         let old_path = manifest.renamed_from.get(path).unwrap_or(path);
@@ -785,22 +785,14 @@ fn entry_map(entries: &[SnapshotEntryMetadata]) -> EntryMap<'_> {
         .collect()
 }
 
-fn group_lint_suppressions(facts: &[SnapshotLintSuppression]) -> LintFactMap<'_> {
+fn group_facts<'a, T>(
+    facts: &'a [T],
+    path_of: impl Fn(&'a T) -> &'a str,
+) -> HashMap<&'a str, Vec<&'a T>> {
     let mut grouped = HashMap::new();
     for fact in facts {
         grouped
-            .entry(fact.path.as_str())
-            .or_insert_with(Vec::new)
-            .push(fact);
-    }
-    grouped
-}
-
-fn group_unsafe_facts(facts: &[SnapshotUnsafeConstruct]) -> UnsafeFactMap<'_> {
-    let mut grouped = HashMap::new();
-    for fact in facts {
-        grouped
-            .entry(fact.path.as_str())
+            .entry(path_of(fact))
             .or_insert_with(Vec::new)
             .push(fact);
     }
@@ -920,8 +912,8 @@ fn evaluate_dependency_rules(
     policy: &Policy,
     report: &mut crate::gate::CheckReport,
 ) {
-    let base_edges = group_dependency_edges(&baseline.dependency_edges);
-    let head_edges = group_dependency_edges(&candidate.dependency_edges);
+    let base_edges = group_facts(&baseline.dependency_edges, |fact| fact.path.as_str());
+    let head_edges = group_facts(&candidate.dependency_edges, |fact| fact.path.as_str());
     for path in manifest
         .changed
         .iter()
@@ -932,19 +924,6 @@ fn evaluate_dependency_rules(
         let head = dependency_records(head_edges.get(path.as_str()));
         evaluate_dependency_edges(path, &head, &base, &policy.config, report);
     }
-}
-
-type DependencyFactMap<'a> = HashMap<&'a str, Vec<&'a SnapshotDependencyEdge>>;
-
-fn group_dependency_edges(facts: &[SnapshotDependencyEdge]) -> DependencyFactMap<'_> {
-    let mut grouped = HashMap::new();
-    for fact in facts {
-        grouped
-            .entry(fact.path.as_str())
-            .or_insert_with(Vec::new)
-            .push(fact);
-    }
-    grouped
 }
 
 fn dependency_records(facts: Option<&Vec<&SnapshotDependencyEdge>>) -> Vec<DependencyEdge> {

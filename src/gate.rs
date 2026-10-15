@@ -230,26 +230,16 @@ pub(crate) fn check_mass(
         };
         let source = repository.read_blob(&head_commit, path)?;
         if file.language == "rust" {
-            evaluate_lint_suppressions(
+            let context = RustSurfaceContext {
                 repository,
-                &base_commit,
+                base: &base_commit,
                 path,
-                changed.renamed_from.get(path.as_str()),
-                changed.added_lines.get(path.as_str()),
-                &source,
+                renamed_from: changed.renamed_from.get(path.as_str()),
+                added_lines: changed.added_lines.get(path.as_str()),
+                source: &source,
                 config,
-                &mut report,
-            )?;
-            evaluate_unsafe_surface(
-                repository,
-                &base_commit,
-                path,
-                changed.renamed_from.get(path.as_str()),
-                changed.added_lines.get(path.as_str()),
-                &source,
-                config,
-                &mut report,
-            )?;
+            };
+            evaluate_rust_surfaces(&context, &mut report)?;
         }
     }
     for path in &changed.cargo_paths {
@@ -975,28 +965,43 @@ fn erosion_finding(input: ErosionFindingInput<'_>) -> Finding {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn evaluate_lint_suppressions(
-    repository: &GitRepository,
-    base: &str,
-    path: &str,
-    renamed_from: Option<&String>,
-    added_lines: Option<&ChangedLineSet>,
-    head_source: &str,
-    config: &GateConfig,
+struct RustSurfaceContext<'a> {
+    repository: &'a GitRepository,
+    base: &'a str,
+    path: &'a str,
+    renamed_from: Option<&'a String>,
+    added_lines: Option<&'a ChangedLineSet>,
+    source: &'a str,
+    config: &'a GateConfig,
+}
+
+fn evaluate_rust_surfaces(
+    context: &RustSurfaceContext<'_>,
     report: &mut CheckReport,
 ) -> Result<()> {
     evaluate_rust_surface_records(
-        repository,
-        base,
-        path,
-        renamed_from,
-        added_lines,
-        head_source,
-        config,
+        context.repository,
+        context.base,
+        context.path,
+        context.renamed_from,
+        context.added_lines,
+        context.source,
+        context.config,
         report,
         lint_suppressions,
         evaluate_lint_suppression_records,
+    )?;
+    evaluate_rust_surface_records(
+        context.repository,
+        context.base,
+        context.path,
+        context.renamed_from,
+        context.added_lines,
+        context.source,
+        context.config,
+        report,
+        unsafe_surface,
+        evaluate_unsafe_surface_records,
     )
 }
 
@@ -1085,31 +1090,6 @@ pub(crate) fn evaluate_lint_suppression_records(
             config,
         );
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn evaluate_unsafe_surface(
-    repository: &GitRepository,
-    base: &str,
-    path: &str,
-    renamed_from: Option<&String>,
-    added_lines: Option<&ChangedLineSet>,
-    source: &str,
-    config: &GateConfig,
-    report: &mut CheckReport,
-) -> Result<()> {
-    evaluate_rust_surface_records(
-        repository,
-        base,
-        path,
-        renamed_from,
-        added_lines,
-        source,
-        config,
-        report,
-        unsafe_surface,
-        evaluate_unsafe_surface_records,
-    )
 }
 
 pub(crate) fn evaluate_unsafe_surface_records(
