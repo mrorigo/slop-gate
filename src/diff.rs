@@ -41,6 +41,15 @@ pub(crate) fn added_line_numbers(
     if max_cells.is_some_and(|limit| cells > limit) {
         return Err(Error::invalid("line diff budget", "budget exceeded"));
     }
+    let (columns, lcs) = build_lcs_table(baseline, candidate, cancelled)?;
+    Ok(collect_added_lines(baseline, candidate, columns, &lcs))
+}
+
+fn build_lcs_table(
+    baseline: &[u64],
+    candidate: &[u64],
+    cancelled: &AtomicBool,
+) -> Result<(usize, Vec<usize>)> {
     let columns = candidate
         .len()
         .checked_add(1)
@@ -67,6 +76,15 @@ pub(crate) fn added_line_numbers(
             };
         }
     }
+    Ok((columns, lcs))
+}
+
+fn collect_added_lines(
+    baseline: &[u64],
+    candidate: &[u64],
+    columns: usize,
+    lcs: &[usize],
+) -> Vec<usize> {
     let mut added = Vec::new();
     let (mut old_index, mut new_index) = (0, 0);
     while new_index < candidate.len() {
@@ -83,5 +101,5 @@ pub(crate) fn added_line_numbers(
             new_index += 1;
         }
     }
-    Ok(added)
+    added
 }

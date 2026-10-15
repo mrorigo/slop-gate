@@ -313,6 +313,30 @@ pub(crate) fn evaluate_function_changes(
         .flat_map(|file| file.functions.iter())
         .map(|function| (function.identity.clone(), function))
         .collect::<HashMap<_, _>>();
+    let clone_index = build_clone_index(
+        baseline_files,
+        candidate_changed_files,
+        candidate_paths,
+        changed_paths,
+        renamed_from,
+    );
+    evaluate_changed_functions(
+        &base_functions,
+        candidate_changed_files,
+        changed_paths,
+        renamed_from,
+        config,
+        clone_index,
+    )
+}
+
+fn build_clone_index(
+    baseline_files: &[crate::analysis::AnalyzedFile],
+    candidate_changed_files: &HashMap<String, crate::analysis::AnalyzedFile>,
+    candidate_paths: &HashSet<String>,
+    changed_paths: &[String],
+    renamed_from: &HashMap<String, String>,
+) -> CloneIndex {
     let changed_base_paths = renamed_from
         .values()
         .chain(changed_paths.iter())
@@ -351,7 +375,17 @@ pub(crate) fn evaluate_function_changes(
             }
         })
         .collect::<Vec<_>>();
-    let mut clone_index = CloneIndex::from_functions(clone_candidates);
+    CloneIndex::from_functions(clone_candidates)
+}
+
+fn evaluate_changed_functions(
+    base_functions: &HashMap<FunctionIdentity, &FunctionRecord>,
+    candidate_changed_files: &HashMap<String, crate::analysis::AnalyzedFile>,
+    changed_paths: &[String],
+    renamed_from: &HashMap<String, String>,
+    config: &GateConfig,
+    mut clone_index: CloneIndex,
+) -> CheckReport {
     let mut report = CheckReport::default();
     for path in changed_paths {
         let Some(file) = candidate_changed_files.get(path) else {
@@ -952,17 +986,44 @@ fn evaluate_lint_suppressions(
     config: &GateConfig,
     report: &mut CheckReport,
 ) -> Result<()> {
+    evaluate_rust_surface_records(
+        repository,
+        base,
+        path,
+        renamed_from,
+        added_lines,
+        head_source,
+        config,
+        report,
+        lint_suppressions,
+        evaluate_lint_suppression_records,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_rust_surface_records<T>(
+    repository: &GitRepository,
+    base: &str,
+    path: &str,
+    renamed_from: Option<&String>,
+    added_lines: Option<&ChangedLineSet>,
+    head_source: &str,
+    config: &GateConfig,
+    report: &mut CheckReport,
+    extract: fn(&str, &str) -> Result<Vec<T>>,
+    evaluate: fn(&str, &[T], &[T], &ChangedLineSet, &GateConfig, &mut CheckReport),
+) -> Result<()> {
     let Some(added_lines) = added_lines else {
         return Ok(());
     };
-    let head_facts = lint_suppressions(path, head_source)?;
     let base_path = renamed_from.map_or(path, String::as_str);
     let base_facts = repository
         .read_blob_if_exists(base, base_path)?
-        .map(|source| lint_suppressions(base_path, &source))
+        .map(|source| extract(base_path, &source))
         .transpose()?
         .unwrap_or_default();
-    evaluate_lint_suppression_records(path, &head_facts, &base_facts, added_lines, config, report);
+    let head_facts = extract(path, head_source)?;
+    evaluate(path, &head_facts, &base_facts, added_lines, config, report);
     Ok(())
 }
 
@@ -1037,18 +1098,18 @@ fn evaluate_unsafe_surface(
     config: &GateConfig,
     report: &mut CheckReport,
 ) -> Result<()> {
-    let Some(added_lines) = added_lines else {
-        return Ok(());
-    };
-    let base_path = renamed_from.map_or(path, String::as_str);
-    let base_facts = repository
-        .read_blob_if_exists(base, base_path)?
-        .map(|source| unsafe_surface(base_path, &source))
-        .transpose()?
-        .unwrap_or_default();
-    let head_facts = unsafe_surface(path, source)?;
-    evaluate_unsafe_surface_records(path, &head_facts, &base_facts, added_lines, config, report);
-    Ok(())
+    evaluate_rust_surface_records(
+        repository,
+        base,
+        path,
+        renamed_from,
+        added_lines,
+        source,
+        config,
+        report,
+        unsafe_surface,
+        evaluate_unsafe_surface_records,
+    )
 }
 
 pub(crate) fn evaluate_unsafe_surface_records(
