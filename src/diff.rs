@@ -1,4 +1,4 @@
-// Rust guideline compliant 2026-10-19
+// Rust guideline compliant 2026-10-20
 //! Deterministic line mapping shared by CLI and snapshot adapters.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,9 +25,9 @@ pub(crate) fn line_hashes(bytes: &[u8]) -> Vec<u64> {
 
 /// Returns one-based candidate lines absent from a deterministic LCS mapping.
 ///
-/// Common boundaries bound the insertion/deletion distance and therefore the
-/// matrix band. Equal-cost paths still prefer deletion, preserving attribution
-/// when repeated lines permit several longest common subsequences.
+/// A common prefix is skipped, then the matrix band grows until the edit
+/// distance is exact. Equal-cost paths still prefer deletion, preserving
+/// attribution when repeated lines permit several longest common subsequences.
 ///
 /// # Errors
 /// Returns an error if the cell budget is exceeded, dimensions overflow, or
@@ -63,16 +63,54 @@ fn remaining_added_lines(
     if baseline.is_empty() {
         return Ok((1..=candidate.len()).collect());
     }
-    let suffix = common_length(baseline.iter().rev().zip(candidate.iter().rev()), cancelled)?;
-    // Replacing the middle while keeping the suffix bounds the edit distance.
-    // Every optimal path fits inside that band. Retain the suffix in the table
-    // because anchoring it directly can change which repeated lines are added.
-    let distance_bound = (baseline.len() - suffix)
-        .checked_add(candidate.len() - suffix)
-        .ok_or_else(|| Error::invalid("line diff budget", "distance bound overflow"))?;
-    let distances =
-        build_distance_table(baseline, candidate, distance_bound, max_cells, cancelled)?;
+    let distances = build_exact_distance_table(baseline, candidate, max_cells, cancelled)?;
     Ok(collect_added_lines(baseline, candidate, &distances))
+}
+
+fn build_exact_distance_table(
+    baseline: &[u64],
+    candidate: &[u64],
+    max_cells: Option<usize>,
+    cancelled: &AtomicBool,
+) -> Result<DistanceTable> {
+    let full_band = baseline.len().max(candidate.len());
+    let budget_band = affordable_band(baseline.len(), candidate.len(), max_cells);
+    let mut band = baseline.len().abs_diff(candidate.len());
+    loop {
+        let table = build_distance_table(baseline, candidate, band, max_cells, cancelled)?;
+        // Leaving this band costs more than `band` insertions/deletions. A path
+        // costing at most `band` is therefore globally optimal. A full matrix
+        // is exact regardless of its distance, including unrelated inputs.
+        if table.get(0, 0) <= band || band == full_band {
+            return Ok(table);
+        }
+        let next_band = band
+            .saturating_mul(2)
+            .max(1)
+            .min(full_band)
+            .min(budget_band);
+        if next_band <= band {
+            return Err(Error::invalid("line diff budget", "budget exceeded"));
+        }
+        band = next_band;
+    }
+}
+
+fn affordable_band(
+    baseline_lines: usize,
+    candidate_lines: usize,
+    max_cells: Option<usize>,
+) -> usize {
+    let full_band = baseline_lines.max(candidate_lines);
+    let Some(limit) = max_cells else {
+        return full_band;
+    };
+    let width = limit / baseline_lines.saturating_add(1);
+    if width > candidate_lines {
+        full_band
+    } else {
+        width.saturating_sub(1) / 2
+    }
 }
 
 fn common_length<'a>(
@@ -199,6 +237,40 @@ fn collect_added_lines(
 mod tests {
     use super::added_line_numbers;
     use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn distant_edits_in_large_files_fit_the_cell_budget() {
+        for baseline in [vec![1; 10_000], (0..10_000).collect::<Vec<u64>>()] {
+            let mut candidate = baseline.clone();
+            for position in [0, 5_000, 9_999] {
+                candidate[position] = u64::MAX;
+            }
+            assert_eq!(
+                added_line_numbers(
+                    &baseline,
+                    &candidate,
+                    Some(4_000_000),
+                    &AtomicBool::new(false)
+                )
+                .unwrap(),
+                vec![1, 5_001, 10_000]
+            );
+        }
+    }
+
+    #[test]
+    fn distant_insertions_and_deletions_keep_candidate_line_numbers() {
+        let baseline = (0..10_000).collect::<Vec<u64>>();
+        let mut candidate = baseline.clone();
+        candidate.remove(100);
+        candidate.insert(9_000, u64::MAX);
+        candidate.insert(9_001, u64::MAX - 1);
+        assert_eq!(
+            added_line_numbers(&baseline, &candidate, Some(70_000), &AtomicBool::new(false))
+                .unwrap(),
+            vec![9_001, 9_002]
+        );
+    }
 
     #[test]
     fn small_edits_in_large_files_fit_the_cell_budget() {
