@@ -42,13 +42,26 @@ pub(crate) fn added_line_numbers(
         return Err(Error::invalid("line diff", "cancelled"));
     }
     let prefix = common_length(baseline.iter().zip(candidate), cancelled)?;
-    let baseline = &baseline[prefix..];
-    let candidate = &candidate[prefix..];
+    let added = remaining_added_lines(
+        &baseline[prefix..],
+        &candidate[prefix..],
+        max_cells,
+        cancelled,
+    )?;
+    Ok(added.into_iter().map(|line| line + prefix).collect())
+}
+
+fn remaining_added_lines(
+    baseline: &[u64],
+    candidate: &[u64],
+    max_cells: Option<usize>,
+    cancelled: &AtomicBool,
+) -> Result<Vec<usize>> {
     if candidate.is_empty() {
         return Ok(Vec::new());
     }
     if baseline.is_empty() {
-        return Ok((prefix + 1..=prefix + candidate.len()).collect());
+        return Ok((1..=candidate.len()).collect());
     }
     let suffix = common_length(baseline.iter().rev().zip(candidate.iter().rev()), cancelled)?;
     // Replacing the middle while keeping the suffix bounds the edit distance.
@@ -59,10 +72,7 @@ pub(crate) fn added_line_numbers(
         .ok_or_else(|| Error::invalid("line diff budget", "distance bound overflow"))?;
     let distances =
         build_distance_table(baseline, candidate, distance_bound, max_cells, cancelled)?;
-    Ok(collect_added_lines(baseline, candidate, &distances)
-        .into_iter()
-        .map(|line| line + prefix)
-        .collect())
+    Ok(collect_added_lines(baseline, candidate, &distances))
 }
 
 fn common_length<'a>(
@@ -102,6 +112,31 @@ impl DistanceTable {
         }
         self.cells[row * self.width + column - start]
     }
+
+    fn fill(&mut self, baseline: &[u64], candidate: &[u64], cancelled: &AtomicBool) -> Result<()> {
+        for old_index in (0..self.rows).rev() {
+            if cancelled.load(Ordering::Relaxed) {
+                return Err(Error::invalid("line diff", "cancelled"));
+            }
+            let start = old_index.saturating_sub(self.band);
+            let end = old_index.saturating_add(self.band).min(candidate.len());
+            for new_index in (start..=end).rev() {
+                let distance = if old_index == baseline.len() {
+                    candidate.len() - new_index
+                } else if new_index == candidate.len() {
+                    baseline.len() - old_index
+                } else if baseline[old_index] == candidate[new_index] {
+                    self.get(old_index + 1, new_index + 1)
+                } else {
+                    self.get(old_index + 1, new_index)
+                        .min(self.get(old_index, new_index + 1))
+                        .saturating_add(1)
+                };
+                self.cells[old_index * self.width + new_index - start] = distance;
+            }
+        }
+        Ok(())
+    }
 }
 
 fn build_distance_table(
@@ -133,28 +168,7 @@ fn build_distance_table(
         band,
         cells: vec![usize::MAX; matrix_len],
     };
-    for old_index in (0..rows).rev() {
-        if cancelled.load(Ordering::Relaxed) {
-            return Err(Error::invalid("line diff", "cancelled"));
-        }
-        let start = old_index.saturating_sub(band);
-        let end = old_index.saturating_add(band).min(candidate.len());
-        for new_index in (start..=end).rev() {
-            let distance = if old_index == baseline.len() {
-                candidate.len() - new_index
-            } else if new_index == candidate.len() {
-                baseline.len() - old_index
-            } else if baseline[old_index] == candidate[new_index] {
-                table.get(old_index + 1, new_index + 1)
-            } else {
-                table
-                    .get(old_index + 1, new_index)
-                    .min(table.get(old_index, new_index + 1))
-                    .saturating_add(1)
-            };
-            table.cells[old_index * width + new_index - start] = distance;
-        }
-    }
+    table.fill(baseline, candidate, cancelled)?;
     Ok(table)
 }
 
