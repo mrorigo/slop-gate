@@ -301,7 +301,10 @@ pub struct ResourceLimits {
     pub max_files: Option<usize>,
     /// Maximum total source bytes; `None` means unlimited.
     pub max_source_bytes: Option<usize>,
-    /// Maximum baseline-candidate line comparison cells; `None` is unlimited.
+    /// Maximum allocated line-diff matrix cells, including boundary cells.
+    ///
+    /// Common boundaries narrow the matrix for small edits in large files.
+    /// `None` means unlimited.
     pub max_diff_cells: Option<usize>,
 }
 
@@ -1691,6 +1694,83 @@ mod tests {
                 .iter()
                 .any(|finding| finding.rule_id == "structural-erosion")
         );
+    }
+
+    #[test]
+    fn large_file_small_edit_completes_with_bounded_diff() {
+        let policy = parse_policy(b"version = 1\n").unwrap();
+        let padding = "// unchanged\n".repeat(2_000);
+        let source = format!("{padding}fn example() {{}}\n{padding}");
+        let changed_source = source.replace("fn example()", "pub fn example()");
+        let baseline = snapshot("base", vec![entry("src/lib.rs", source.as_bytes())]);
+        let candidate = snapshot(
+            "candidate",
+            vec![entry("src/lib.rs", changed_source.as_bytes())],
+        );
+        let report = evaluate(
+            &index(&baseline, &policy),
+            &candidate,
+            &changed("src/lib.rs"),
+            &policy,
+            &AtomicBool::new(false),
+            ResourceLimits {
+                max_diff_cells: Some(4_000_000),
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            report.completeness.complete,
+            "{:?}",
+            report.completeness.reasons
+        );
+        assert!(
+            report
+                .rule_coverage
+                .iter()
+                .filter(|rule| rule.applicable)
+                .all(|rule| rule.completed)
+        );
+    }
+
+    #[test]
+    fn bounded_diff_preserves_surface_findings_in_large_files() {
+        let policy = parse_policy(b"version = 1\n").unwrap();
+        let padding = "// unchanged\n".repeat(2_000);
+        let source = format!("{padding}fn example() {{}}\n{padding}");
+        let changed_source = source.replace(
+            "fn example() {}",
+            "#[allow(dead_code)]\nunsafe fn example() {}",
+        );
+        let baseline = snapshot("base", vec![entry("src/lib.rs", source.as_bytes())]);
+        let candidate = snapshot(
+            "candidate",
+            vec![entry("src/lib.rs", changed_source.as_bytes())],
+        );
+        let report = evaluate(
+            &index(&baseline, &policy),
+            &candidate,
+            &changed("src/lib.rs"),
+            &policy,
+            &AtomicBool::new(false),
+            ResourceLimits {
+                max_diff_cells: Some(4_000_000),
+                ..ResourceLimits::default()
+            },
+        )
+        .unwrap();
+
+        assert!(report.completeness.complete);
+        for rule in ["lint-suppression-growth", "unsafe-surface-growth"] {
+            assert!(
+                report
+                    .findings
+                    .iter()
+                    .any(|finding| finding.rule_id == rule),
+                "missing {rule}"
+            );
+        }
     }
 
     #[test]
