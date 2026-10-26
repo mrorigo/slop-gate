@@ -55,7 +55,9 @@ pub fn analyze_typescript_file(path: &str, source: &str) -> Result<AnalyzedFile>
     let tree = parser
         .parse(source, None)
         .ok_or_else(|| Error::invalid("TypeScript parser", "did not produce a syntax tree"))?;
-    if tree.root_node().has_error() {
+    if tree.root_node().has_error()
+        && !is_known_tsx_text_ampersand_error(path, source, tree.root_node())
+    {
         let node = first_error_node(tree.root_node());
         return Err(Error::invalid(
             "TypeScript source",
@@ -76,6 +78,38 @@ pub fn analyze_typescript_file(path: &str, source: &str) -> Result<AnalyzedFile>
         content_hash: blake3::hash(source.as_bytes()).to_hex().to_string(),
         functions,
     })
+}
+
+fn is_known_tsx_text_ampersand_error(path: &str, source: &str, root: Node<'_>) -> bool {
+    if !path.ends_with(".tsx") {
+        return false;
+    }
+    let mut errors = Vec::new();
+    collect_error_nodes(root, &mut errors);
+    !errors.is_empty()
+        && errors.into_iter().all(|node| {
+            node.is_error()
+                && source.get(node.byte_range()).is_some_and(|fragment| {
+                    fragment.starts_with('&')
+                        && fragment[1..]
+                            .chars()
+                            .next()
+                            .is_some_and(char::is_whitespace)
+                })
+        })
+}
+
+fn collect_error_nodes<'tree>(node: Node<'tree>, errors: &mut Vec<Node<'tree>>) {
+    if node.is_error() || node.is_missing() {
+        errors.push(node);
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.has_error() {
+            collect_error_nodes(child, errors);
+        }
+    }
 }
 
 fn collect_functions(
@@ -478,6 +512,19 @@ mod tests {
         assert_eq!(file.functions.len(), 1);
         assert_eq!(file.functions[0].identity.qualified_name, "Greeting");
         assert!(file.functions[0].token_count > 0);
+    }
+
+    #[test]
+    fn accepts_bare_ampersands_in_tsx_text() {
+        let source = "function Heading() { return <h3>Scheduler & Execution Limits</h3>; }\n";
+        let file = analyze_typescript_file("src/heading.tsx", source).unwrap();
+        assert_eq!(file.functions[0].identity.qualified_name, "Heading");
+    }
+
+    #[test]
+    fn rejects_other_tsx_syntax_errors_alongside_bare_ampersands() {
+        let source = "<div>Scheduler & Limits {value</div>";
+        assert!(analyze_typescript_file("src/headings.tsx", source).is_err());
     }
 
     #[test]
